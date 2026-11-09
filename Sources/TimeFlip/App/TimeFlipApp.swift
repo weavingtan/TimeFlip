@@ -39,6 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--open-settings") {
             coordinator.openSettings()
         }
+
+        if CommandLine.arguments.contains("--selftest-hit") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                print("HITTEST \(coordinator.hitTestReport())")
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

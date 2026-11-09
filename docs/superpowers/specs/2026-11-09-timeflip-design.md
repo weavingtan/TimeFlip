@@ -23,8 +23,8 @@
 
 - S1：用户打开 App → 菜单栏出现图标 → 点「开始专注」→ 桌面翻转时钟从当前时间切为 `24:59` 倒计时 → 到点提示音 + 通知 → 自动进入 5 分钟短休。
 - S2：用户只想把桌面当时钟看 → 显示内容设为「仅时钟」，桌面挂件显示 `HH:mm:ss` + 日期。
-- S3：用户觉得挡视线 → 菜单栏右键 → 层级切「贴桌面」，鼠标穿透，桌面图标与右键菜单照常可用。
-- S4：用户想挪位置/改大小 → 「调整桌面时钟位置」→ 窗口进入可拖拽态 → 拖完自动保存。
+- S3：用户觉得挡视线 → 菜单栏右键 → 层级切「贴桌面」，落在所有窗口之下，不遮挡任何 App。
+- S4：用户想挪位置 → 直接按住时钟任意位置拖动（不需要先进入什么模式）→ 松手后位置按屏幕记住。
 - S5：用户想要更大更透明 → 设置面板拖动滑杆，桌面上的挂件同步变化。
 
 ## 4. 架构总览
@@ -80,7 +80,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 - `NSStatusItem(variableLength)`；图标为自绘 `NSImage`（模板图），运行中绘制圆环进度 + 右侧等宽数字文本。
 - 文本：运行中 `mm:ss`（超过 1 小时用 `h:mm:ss`）；空闲显示当前预设时长；已结束且未重置显示红色。
 - 左键点击：`NSPopover`（SwiftUI `MenuPanelView`），内容为阶段名、剩余时间、开始/暂停、跳过、重置、时长快捷切换、自定义分钟输入。
-- 右键点击（或长按）：`NSMenu`：设置…、调整桌面时钟位置、显示/隐藏桌面时钟、开机自启（勾选）、退出。
+- 右键点击（或长按）：`NSMenu`：设置…、显示/隐藏桌面时钟、退出。
 - popover 使用 `.transient` 行为，失焦自动关闭；菜单栏在浅色/深色下都用模板图，避免配色问题。
 
 ### 5.3 FloatingClockWindowController
@@ -92,14 +92,15 @@ Controller   WindowController    Controller        (HotKey/Chime/
 |---|---|---|
 | `level` | `Int(CGWindowLevelForKey(.desktopIconWindow)) + 1`（实测 -2147483602：在 Finder 桌面窗口 -2147483603 之上，远低于普通窗口 0） | `.floating`（3） |
 | `collectionBehavior` | `[.canJoinAllSpaces, .stationary, .ignoresCycle]` | `[.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]` |
-| `ignoresMouseEvents` | `true`（默认穿透，不挡桌面右键与图标） | `false` |
-| 拖动 | 仅「调整位置」临时态下允许 | 随时可拖（`isMovableByWindowBackground = true`） |
+| 鼠标 | `ignoresMouseEvents = false`，时钟区域内的点击被挂件接管（为了随时可拖），区域外照常落给桌面 | 同左 |
+| 拖动 | 随时按住即可拖（拖拽层接管，见下） | 同左 |
 | 全屏 App 下 | 不可见 | 可见（`fullScreenAuxiliary`） |
 
 - 形态：`fullScreen` = 窗口 frame 取 `NSScreen.frame`，字号按屏宽反算；`floating` = 用户尺寸（宽高由字号推导），位置可拖。
 - 默认形态：浮动 + 贴桌面 + 字号 96 + 显示内容 `auto`。
 - 多屏：位置按 `CGDisplayCreateUUIDFromDisplayID` 得到的 UUID 存字典；屏幕拔插、分辨率变化时对超出屏幕的坐标做夹取修正。
-- 「调整位置」临时态：8 秒可拖 + 虚线描边提示；期间 `ignoresMouseEvents = false`，结束或点击别处后恢复穿透并持久化位置。
+- 拖拽：窗口用 `NSPanel` + `.nonactivatingPanel`，内容之上盖一层 `DragCatcherView`（`acceptsFirstMouse = true`，`mouseDown` → `performDrag`）。因此任意时刻按住即可拖，且点击不会把 TimeFlip 变成前台 App。
+- 位置只在「首次布局 / 尺寸变化 / 形态切换」时应用，每秒刷新不得重设窗口坐标，否则拖动会被拽回原处。拖动停下 0.35s 后夹回屏幕可见范围并按屏幕 UUID 持久化；程序化改 frame 触发 `windowDidMove` 时用 `lastAppliedFrame` 过滤，避免写入伪位置。
 - 空间切换、睡眠唤醒后重新 `orderFrontRegardless()`，避免窗口被系统收掉。
 
 ### 5.4 FlipClockView / FlipDigitView（展示层）
@@ -114,7 +115,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 ```
 
 - 每个**数字**是一张卡片：上半 + 下半两块，中间一条 1px 分隔缝，卡片圆角 8~12%（随字号）。
-- 翻页动画（仅当数字变化时触发，两段式）：
+- 翻页动画（仅当数字变化时触发，单条角度曲线 0 → -90 → -180，共 280ms，`KeyframeAnimator` 驱动）：
   1. 0→90ms：旧上半绕底边 `rotation3DEffect` 0°→-90°，`perspective 0.55`，渐隐到 0.6；
   2. 90→180ms：新下半 90°→0°，同时新上半立即就位（先显示新上半，避免闪白）。
   - 非动画位直接换字，避免整排跳动。
@@ -149,7 +150,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 ### 5.6 SettingsWindowController
 - 普通可缩放窗口（不是面板），左侧 rail + 右侧表单的自绘分段布局（不用系统 TabView，避免样式不可控）：
   1. **计时器**：专注/短休/长休分钟数（1...180）、几轮长休（2...8）、自动开始下一阶段、提示音选择（系统音列表 + 试听）、全局快捷键录制。
-  2. **桌面时钟**：显示内容（自动/仅倒计时/仅时钟）、形态（铺满/浮动）、层级（贴桌面/置顶）、样式、字号、背景色+不透明度、字体、字体色、阴影开关与强度、显示秒/日期/底行/24 小时制/冒号闪烁、「调整位置」按钮。页面内嵌一个 1:8 比例的实时预览。
+  2. **桌面时钟**：显示内容（自动/仅倒计时/仅时钟）、形态（铺满/浮动）、层级（贴桌面/置顶）、样式、字号、背景色+不透明度、字体、字体色、阴影开关与强度、显示秒/日期/底行/24 小时制/冒号闪烁。页面内嵌实时预览，并提示「按住时钟即可拖动」。
   3. **通用**：开机自启、菜单栏显示样式（图标+时间/仅时间/仅图标）、恢复默认设置。
 - 所有改动写回 `SettingsStore`，300ms 防抖落盘；滑杆拖动时窗口实时更新。
 
@@ -212,7 +213,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 6. 清理：还原 settings.json（先备份）、退出 App。
 
 ### 手动验收清单（写进 README 前不单独建文档）
-自动开始、声音、通知降级、快捷键、开机自启、多屏拖动记忆、桌面穿透。
+自动开始、声音、通知降级、快捷键、开机自启、多屏拖动记忆、随时拖拽与位置记忆。
 
 ## 9. 风险与对策
 

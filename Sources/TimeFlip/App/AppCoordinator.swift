@@ -80,7 +80,6 @@ final class AppCoordinator: NSObject {
         model.startCustom = { [weak self] minutes in self?.engine.startCustom(minutes: minutes) }
         model.openSettings = { [weak self] in self?.openSettings() }
         model.setClockVisible = { [weak self] visible in self?.setClockVisible(visible) }
-        model.adjustPosition = { [weak self] in self?.clockController?.beginRepositioning() }
         model.quit = { NSApp.terminate(nil) }
         model.previewChime = { [weak self] name in self?.chime.play(name: name) }
         model.commitSettings = { [weak self] in self?.applySettings() }
@@ -235,6 +234,10 @@ final class AppCoordinator: NSObject {
         }
         saveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    func hitTestReport() -> String {
+        clockController?.hitTestReport() ?? "no clock window"
     }
 
     func openSettings() {

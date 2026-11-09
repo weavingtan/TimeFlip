@@ -1,6 +1,26 @@
 import AppKit
 import SwiftUI
 
+/// 不抢焦点的挂件窗口：nonactivatingPanel 让点击它不会把 TimeFlip 变成前台 App，
+/// 菜单栏不会突然切成 TimeFlip，拖动时也不会打断当前 App。
+private final class ClockWindow: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// 盖在 SwiftUI 内容上的拖拽层：按住任意位置即可拖动窗口，且第一下点击就生效。
+private final class DragCatcherView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var isOpaque: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        if ProcessInfo.processInfo.environment["TIMEFLIP_DEBUG"] == "1" {
+            NSLog("TimeFlip clock drag began")
+        }
+        window?.performDrag(with: event)
+    }
+}
+
 @MainActor
 final class FloatingClockWindowController: NSObject, NSWindowDelegate {
     /// 贴桌面层级：位于 Finder 桌面图标窗口（kCGDesktopIconWindowLevel）之上，
@@ -10,22 +30,26 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1
     )
 
-    private let window: NSWindow
+    private let window: ClockWindow
+    private let container = NSView(frame: .zero)
+    private let dragCatcher = DragCatcherView(frame: .zero)
     private var hosting: NSHostingView<ClockHostView>?
     private var display: ClockDisplayModel?
     private var lastRender: ClockRenderModel?
     private var lastBehavior: ClockBehavior?
     private var lastPlacements: [String: WindowOrigin] = [:]
     private var isApplyingFrame = false
-    private var isRepositioning = false
-    private var repositionTimer: Timer?
+    private var lastAppliedFrame: NSRect = .zero
+    private var persistWorkItem: DispatchWorkItem?
+    private var didInitialLayout = false
+    private var lastForm: WindowForm?
 
     var onMove: ((String, WindowOrigin) -> Void)?
 
     override init() {
-        window = NSWindow(
+        window = ClockWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 260),
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -34,13 +58,20 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.ignoresMouseEvents = true
+        window.ignoresMouseEvents = false
         window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
+        window.isFloatingPanel = true
+        window.becomesKeyOnlyIfNeeded = true
+        window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.level = Self.desktopLevel
         window.title = "TimeFlip Clock"
         window.delegate = self
+
+        container.wantsLayer = true
+        container.addSubview(dragCatcher)
+        window.contentView = container
 
         NotificationCenter.default.addObserver(
             self,
@@ -73,17 +104,29 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
             showBottom: render.bottomLine != nil
         )
 
+        let formChanged = lastForm != behavior.form
+        lastForm = behavior.form
+
         if behavior.form == .fullScreen, let screen = targetScreen {
             let frame = screen.frame
-            apply(frame: frame)
-            setRoot(render: render, fill: frame.size)
+            if formChanged || !didInitialLayout || window.frame != frame {
+                apply(frame: frame)
+            }
+            setRoot(render: render, fill: frame.size, draggable: false)
         } else {
             let size = contentSize
-            let origin = originFor(screen: targetScreen, size: size)
-            apply(frame: NSRect(origin: origin, size: size))
-            setRoot(render: render, fill: size)
+            let sizeChanged = abs(window.frame.width - size.width) > 0.5
+                || abs(window.frame.height - size.height) > 0.5
+
+            // 只在需要时改窗口 frame：每秒刷新不能把用户拖动后的位置拽回去。
+            if formChanged || !didInitialLayout || sizeChanged {
+                let origin = originFor(screen: targetScreen, size: size)
+                apply(frame: NSRect(origin: origin, size: size))
+            }
+            setRoot(render: render, fill: size, draggable: true)
         }
 
+        didInitialLayout = true
         applyLayer(behavior)
         window.orderFrontRegardless()
 
@@ -97,36 +140,6 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    func beginRepositioning() {
-        guard let render = lastRender else { return }
-        isRepositioning = true
-        window.ignoresMouseEvents = false
-        window.isMovableByWindowBackground = true
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        setRoot(render: render, fill: window.frame.size)
-
-        repositionTimer?.invalidate()
-        repositionTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.endRepositioning()
-            }
-        }
-    }
-
-    private func endRepositioning() {
-        guard isRepositioning else { return }
-        isRepositioning = false
-        repositionTimer?.invalidate()
-        repositionTimer = nil
-        if let behavior = lastBehavior {
-            applyLayer(behavior)
-        }
-        if let render = lastRender {
-            setRoot(render: render, fill: window.frame.size)
-        }
-    }
-
     // MARK: - 内部
 
     private var targetScreen: NSScreen? {
@@ -137,44 +150,45 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         isApplyingFrame = true
         window.setFrame(frame, display: true)
         isApplyingFrame = false
-        hosting?.frame = NSRect(origin: .zero, size: frame.size)
+        lastAppliedFrame = frame
+        layoutContent()
     }
 
-    private func setRoot(render: ClockRenderModel, fill: CGSize) {
+    private func layoutContent() {
+        let bounds = NSRect(origin: .zero, size: window.frame.size)
+        container.frame = bounds
+        hosting?.frame = bounds
+        dragCatcher.frame = bounds
+    }
+
+    private func setRoot(render: ClockRenderModel, fill: CGSize, draggable: Bool) {
+        dragCatcher.isHidden = !draggable
+        window.isMovableByWindowBackground = false
+
         if let display {
             display.render = render
             display.fill = fill
-            display.repositioning = isRepositioning
-            hosting?.frame = NSRect(origin: .zero, size: fill)
+            layoutContent()
             return
         }
 
-        let display = ClockDisplayModel(render: render, fill: fill, repositioning: isRepositioning)
+        let display = ClockDisplayModel(render: render, fill: fill)
         let host = NSHostingView(rootView: ClockHostView(display: display))
         host.frame = NSRect(origin: .zero, size: fill)
-        window.contentView = host
+        container.addSubview(host, positioned: .below, relativeTo: dragCatcher)
         hosting = host
         self.display = display
+        layoutContent()
     }
 
     private func applyLayer(_ behavior: ClockBehavior) {
-        if isRepositioning {
-            window.ignoresMouseEvents = false
-            window.isMovableByWindowBackground = true
-            return
-        }
-
         switch behavior.layer {
         case .desktop:
             window.level = Self.desktopLevel
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-            window.ignoresMouseEvents = true
-            window.isMovableByWindowBackground = false
         case .floating:
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-            window.ignoresMouseEvents = false
-            window.isMovableByWindowBackground = true
         }
     }
 
@@ -203,11 +217,53 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowDidMove(_ notification: Notification) {
-        guard isRepositioning, !isApplyingFrame, let screen = window.screen else { return }
+        guard !isApplyingFrame,
+              lastBehavior?.form != .fullScreen,
+              window.frame != lastAppliedFrame else { return }
+        if ProcessInfo.processInfo.environment["TIMEFLIP_DEBUG"] == "1" {
+            NSLog("TimeFlip clock didMove frame=%@", NSStringFromRect(window.frame))
+        }
+        persistWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.settlePosition()
+        }
+        persistWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
+    }
+
+    /// 拖动停下后：夹回屏幕内并记住位置（按屏幕 UUID）。
+    private func settlePosition() {
+        guard let screen = window.screen else { return }
+        let visible = screen.visibleFrame
+        var frame = window.frame
+
+        let maxX = max(visible.minX, visible.maxX - frame.width)
+        let maxY = max(visible.minY, visible.maxY - frame.height)
+        let clamped = NSRect(
+            x: min(max(frame.origin.x, visible.minX), maxX),
+            y: min(max(frame.origin.y, visible.minY), maxY),
+            width: frame.width,
+            height: frame.height
+        )
+
+        if clamped != frame {
+            frame = clamped
+            apply(frame: frame)
+        }
+
         onMove?(
             Self.screenID(screen),
-            WindowOrigin(x: Double(window.frame.origin.x), y: Double(window.frame.origin.y))
+            WindowOrigin(x: Double(frame.origin.x), y: Double(frame.origin.y))
         )
+    }
+
+    /// 自检：确认拖拽层在内容之上、可见、且能命中（用于 --selftest-hit）。
+    func hitTestReport() -> String {
+        let point = NSPoint(x: window.frame.width / 2, y: window.frame.height / 2)
+        let hit = container.hitTest(point)
+        return "level=\(window.level.rawValue) frame=\(NSStringFromRect(window.frame)) "
+            + "catcherHidden=\(dragCatcher.isHidden) "
+            + "hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil")"
     }
 
     static func screenID(_ screen: NSScreen) -> String {

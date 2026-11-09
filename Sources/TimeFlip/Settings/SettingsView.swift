@@ -207,10 +207,7 @@ struct SettingsView: View {
                         )
                     )
                     .toggleStyle(.checkbox)
-                    Button("调整桌面时钟位置") {
-                        model.adjustPosition()
-                    }
-                    Text("进入后 8 秒内可拖动，带虚线边框")
+                    Text("按住时钟任意位置即可拖动，位置按屏幕记住")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()

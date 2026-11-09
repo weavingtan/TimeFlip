@@ -38,6 +38,8 @@ enum PreviewRenderer {
         darkCards.appearance.backgroundOpacity = 0.92
         write(model: render(settings: darkCards, snapshot: snapshot), to: directory.appendingPathComponent("3-flip-dark.png"))
 
+        writeFlipAngles(to: directory.appendingPathComponent("5-flip-angles.png"))
+
         snapshot.phase = .idle
         snapshot.isRunning = false
         snapshot.remaining = 1500
@@ -87,6 +89,37 @@ enum PreviewRenderer {
                 continue
             }
             let url = directory.appendingPathComponent("settings-\(page.rawValue).png")
+            try? png.write(to: url)
+            print("wrote \(url.path)")
+        }
+    }
+
+    private static func writeFlipAngles(to url: URL) {
+        var settings = TimeFlipSettings()
+        settings.appearance.fontSize = 140
+        let metrics = ClockMetrics.floating(appearance: settings.appearance)
+        let angles: [Double] = [0, -45, -90, -135, -180]
+
+        let row = HStack(spacing: 34) {
+            ForEach(angles.indices, id: \.self) { index in
+                VStack(spacing: 10) {
+                    FlipDigitView(
+                        text: "8",
+                        metrics: metrics,
+                        appearance: settings.appearance,
+                        previewAngle: angles[index],
+                        previewPrevious: "1"
+                    )
+                    Text("\(Int(angles[index]))°")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+        }
+        .padding(48)
+        .background(Color(white: 0.24))
+
+        if let png = pngData(for: row) {
             try? png.write(to: url)
             print("wrote \(url.path)")
         }

@@ -100,14 +100,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         toggleClock.target = self
         menu.addItem(toggleClock)
 
-        let reposition = NSMenuItem(
-            title: "调整桌面时钟位置",
-            action: #selector(menuReposition),
-            keyEquivalent: ""
-        )
-        reposition.target = self
-        menu.addItem(reposition)
-
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "设置…", action: #selector(menuSettings), keyEquivalent: ",")
@@ -127,10 +119,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     @objc private func menuToggleClock() {
         model.setClockVisible(!model.clockVisible)
-    }
-
-    @objc private func menuReposition() {
-        model.adjustPosition()
     }
 
     @objc private func menuSettings() {

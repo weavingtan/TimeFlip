@@ -53,12 +53,25 @@ public enum TimeStrings {
         return "Week \(week), Day \(day)"
     }
 
+    private static let formatterLock = NSLock()
+    nonisolated(unsafe) private static var formatterCache: [String: DateFormatter] = [:]
+
+    /// 每秒都要生成文案，缓存 DateFormatter（创建它的开销远大于格式化本身）。
     private static func formatter(_ format: String, calendar: Calendar) -> DateFormatter {
+        let key = "\(format)|\(calendar.identifier)|\(calendar.timeZone.identifier)"
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+
+        if let cached = formatterCache[key] {
+            return cached
+        }
+
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.dateFormat = format
+        formatterCache[key] = formatter
         return formatter
     }
 }

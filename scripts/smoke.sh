@@ -88,6 +88,17 @@ env TIMEFLIP_DEBUG=1 "$BIN" --open-settings > /tmp/timeflip-smoke-settings.log 2
 sleep 3
 "$CHECK" "$LEVEL" floating --require-settings-window
 
+echo "-- 拖拽层自检（命中测试必须落到 DragCatcherView）"
+osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
+pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
+sleep 1
+HIT=$(env TIMEFLIP_DEBUG=1 "$BIN" --selftest-hit 2>&1 | grep HITTEST || true)
+echo "$HIT"
+case "$HIT" in
+  *"hit=DragCatcherView"*) ;;
+  *) echo "FAIL: 拖拽层未命中"; exit 1 ;;
+esac
+
 echo "== 5/5 还原设置并退出"
 cleanup
 trap - EXIT

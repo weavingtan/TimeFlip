@@ -13,7 +13,6 @@ final class AppModel: ObservableObject {
     var startCustom: (Int) -> Void = { _ in }
     var openSettings: () -> Void = {}
     var setClockVisible: (Bool) -> Void = { _ in }
-    var adjustPosition: () -> Void = {}
     var quit: () -> Void = {}
     var previewChime: (String?) -> Void = { _ in }
     var commitSettings: () -> Void = {}

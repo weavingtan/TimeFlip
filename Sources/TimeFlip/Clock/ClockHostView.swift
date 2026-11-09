@@ -6,12 +6,10 @@ import SwiftUI
 final class ClockDisplayModel: ObservableObject {
     @Published var render: ClockRenderModel
     @Published var fill: CGSize
-    @Published var repositioning: Bool
 
-    init(render: ClockRenderModel, fill: CGSize, repositioning: Bool = false) {
+    init(render: ClockRenderModel, fill: CGSize) {
         self.render = render
         self.fill = fill
-        self.repositioning = repositioning
     }
 }
 
@@ -21,15 +19,5 @@ struct ClockHostView: View {
     var body: some View {
         FlipClockView(model: display.render)
             .frame(width: display.fill.width, height: display.fill.height)
-            .overlay {
-                if display.repositioning {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(
-                            Color.accentColor,
-                            style: StrokeStyle(lineWidth: 2, dash: [6, 5])
-                        )
-                        .padding(3)
-                }
-            }
     }
 }
