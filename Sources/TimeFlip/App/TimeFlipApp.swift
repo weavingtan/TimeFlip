@@ -46,9 +46,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+
+        if CommandLine.arguments.contains("--selftest-drag") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                print(coordinator.dragRegressionReport())
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        coordinator?.flushPendingSave()
     }
 }

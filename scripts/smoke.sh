@@ -99,6 +99,17 @@ case "$HIT" in
   *) echo "FAIL: 拖拽层未命中"; exit 1 ;;
 esac
 
+echo "-- 拖拽位置回归（拖动后紧接着尺寸变化，窗口不能弹回旧位置）"
+osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
+pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
+sleep 1
+DRAG=$(env TIMEFLIP_DEBUG=1 "$BIN" --selftest-drag 2>&1 | grep DRAGTEST || true)
+echo "$DRAG"
+case "$DRAG" in
+  *"stayed=true resized=true saved=true"*) ;;
+  *) echo "FAIL: 拖动后窗口被弹回记忆位置 / 位置没记住"; exit 1 ;;
+esac
+
 echo "== 5/5 还原设置并退出"
 cleanup
 trap - EXIT

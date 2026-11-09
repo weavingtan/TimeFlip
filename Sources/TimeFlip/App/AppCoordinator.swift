@@ -227,17 +227,27 @@ final class AppCoordinator: NSObject {
     private func scheduleSave() {
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            _ = try? self.store.update { settings in
-                settings = self.model.settings
-            }
+            self?.flushPendingSave()
         }
         saveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
 
+    /// 退出前把待落盘的设置（含窗口位置）立刻写掉：拖完马上退出也不会丢位置。
+    func flushPendingSave() {
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        _ = try? store.update { settings in
+            settings = self.model.settings
+        }
+    }
+
     func hitTestReport() -> String {
         clockController?.hitTestReport() ?? "no clock window"
+    }
+
+    func dragRegressionReport() -> String {
+        clockController?.dragRegressionReport() ?? "DRAGTEST skip=no-clock"
     }
 
     func openSettings() {

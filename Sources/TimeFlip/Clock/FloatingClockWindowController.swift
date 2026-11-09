@@ -10,6 +10,9 @@ private final class ClockWindow: NSPanel {
 
 /// 盖在 SwiftUI 内容上的拖拽层：按住任意位置即可拖动窗口，且第一下点击就生效。
 private final class DragCatcherView: NSView {
+    var onDragBegan: (() -> Void)?
+    var onDragEnded: (() -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var isOpaque: Bool { false }
 
@@ -17,7 +20,10 @@ private final class DragCatcherView: NSView {
         if ProcessInfo.processInfo.environment["TIMEFLIP_DEBUG"] == "1" {
             NSLog("TimeFlip clock drag began")
         }
+        onDragBegan?()
         window?.performDrag(with: event)
+        // performDrag 是同步的：松手后才返回，这里就是拖拽结束点。
+        onDragEnded?()
     }
 }
 
@@ -43,6 +49,10 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
     private var persistWorkItem: DispatchWorkItem?
     private var didInitialLayout = false
     private var lastForm: WindowForm?
+    /// 拖拽进行中：此时绝不改窗口 frame，否则会和 performDrag 抢位置。
+    private var isDragging = false
+    /// 自检期间不把窗口位置写进用户设置。
+    private var isSelfTesting = false
 
     var onMove: ((String, WindowOrigin) -> Void)?
 
@@ -72,6 +82,20 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         container.wantsLayer = true
         container.addSubview(dragCatcher)
         window.contentView = container
+
+        dragCatcher.onDragBegan = { [weak self] in
+            self?.isDragging = true
+        }
+        dragCatcher.onDragEnded = { [weak self] in
+            guard let self else { return }
+            self.isDragging = false
+            // 松手立刻夹回屏幕内并记住位置，不等 0.35s 去抖：
+            // 去抖窗口里只要来一次尺寸变化（数字位数变了 / 改了字号），就会用旧位置把窗口拽回原处。
+            self.settlePosition()
+            if let render = self.lastRender, let behavior = self.lastBehavior {
+                self.update(render: render, behavior: behavior, placements: self.lastPlacements)
+            }
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -119,9 +143,15 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
                 || abs(window.frame.height - size.height) > 0.5
 
             // 只在需要时改窗口 frame：每秒刷新不能把用户拖动后的位置拽回去。
-            if formChanged || !didInitialLayout || sizeChanged {
-                let origin = originFor(screen: targetScreen, size: size)
+            if formChanged || !didInitialLayout {
+                // 首次布局 / 切换形态：用记住的位置。
+                apply(frame: NSRect(origin: originFor(screen: targetScreen, size: size), size: size))
+            } else if sizeChanged, !isDragging {
+                // 只是尺寸变了（数字位数、字号、显示项）：位置以窗口当前所在为准。
+                // 这里绝不能回退到"记住的位置"——落盘是异步的，用旧位置就会在拖动后把窗口弹回原处。
+                let origin = clamped(origin: window.frame.origin, screen: targetScreen, size: size)
                 apply(frame: NSRect(origin: origin, size: size))
+                rememberCurrentPosition()
             }
             setRoot(render: render, fill: size, draggable: true)
         }
@@ -197,18 +227,25 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         let visible = screen.visibleFrame
         let id = Self.screenID(screen)
 
-        var origin: CGPoint
+        let origin: CGPoint
         if let saved = lastPlacements[id] {
             origin = CGPoint(x: saved.x, y: saved.y)
         } else {
             origin = CGPoint(x: visible.maxX - size.width - 48, y: visible.minY + 48)
         }
+        return clamped(origin: origin, screen: screen, size: size)
+    }
 
-        let maxX = visible.maxX - size.width
-        let maxY = visible.maxY - size.height
-        origin.x = min(max(origin.x, visible.minX), max(visible.minX, maxX))
-        origin.y = min(max(origin.y, visible.minY), max(visible.minY, maxY))
-        return origin
+    /// 夹回屏幕可见区域内（不压菜单栏与 Dock）。
+    private func clamped(origin: CGPoint, screen: NSScreen?, size: CGSize) -> CGPoint {
+        guard let screen else { return origin }
+        let visible = screen.visibleFrame
+        let maxX = max(visible.minX, visible.maxX - size.width)
+        let maxY = max(visible.minY, visible.maxY - size.height)
+        return CGPoint(
+            x: min(max(origin.x, visible.minX), maxX),
+            y: min(max(origin.y, visible.minY), maxY)
+        )
     }
 
     @objc private func refreshWindow() {
@@ -233,28 +270,84 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
 
     /// 拖动停下后：夹回屏幕内并记住位置（按屏幕 UUID）。
     private func settlePosition() {
-        guard let screen = window.screen else { return }
-        let visible = screen.visibleFrame
-        var frame = window.frame
+        // window.screen 在窗口跨屏/部分离屏时会是 nil，此时退回 targetScreen；
+        // 否则一次拖到边缘的移动就不会被记住，下次尺寸变化又弹回旧位置。
+        guard let screen = window.screen ?? targetScreen else { return }
+        let size = window.frame.size
+        let origin = clamped(origin: window.frame.origin, screen: screen, size: size)
 
-        let maxX = max(visible.minX, visible.maxX - frame.width)
-        let maxY = max(visible.minY, visible.maxY - frame.height)
-        let clamped = NSRect(
-            x: min(max(frame.origin.x, visible.minX), maxX),
-            y: min(max(frame.origin.y, visible.minY), maxY),
-            width: frame.width,
-            height: frame.height
-        )
-
-        if clamped != frame {
-            frame = clamped
-            apply(frame: frame)
+        if origin != window.frame.origin {
+            apply(frame: NSRect(origin: origin, size: size))
         }
 
-        onMove?(
-            Self.screenID(screen),
-            WindowOrigin(x: Double(frame.origin.x), y: Double(frame.origin.y))
+        let id = Self.screenID(screen)
+        let saved = WindowOrigin(x: Double(origin.x), y: Double(origin.y))
+        lastPlacements[id] = saved
+        guard !isSelfTesting else { return }
+        onMove?(id, saved)
+    }
+
+    /// 位置变了就立刻同步进内存里的 placements，后续任何重排都用新位置。
+    private func rememberCurrentPosition() {
+        guard let screen = window.screen ?? targetScreen else { return }
+        let id = Self.screenID(screen)
+        let saved = WindowOrigin(x: Double(window.frame.origin.x), y: Double(window.frame.origin.y))
+        lastPlacements[id] = saved
+        guard !isSelfTesting else { return }
+        onMove?(id, saved)
+    }
+
+    /// 回归自检：模拟"拖动中窗口移动 + 紧接着一次尺寸变化"，确认窗口停在拖动后的位置，
+    /// 而不是被旧的记忆位置拽回去（历史 bug：拖走了又自己回到原处）。
+    func dragRegressionReport() -> String {
+        guard let render = lastRender, let behavior = lastBehavior else { return "DRAGTEST skip=no-render" }
+        guard behavior.form != .fullScreen, let screen = window.screen ?? targetScreen else {
+            return "DRAGTEST skip=unavailable"
+        }
+
+        isSelfTesting = true
+        defer { isSelfTesting = false }
+
+        let before = window.frame
+        let visible = screen.visibleFrame
+        let start = NSPoint(x: visible.minX + 120, y: visible.minY + 120)
+        apply(frame: NSRect(origin: start, size: before.size))
+
+        let moved = NSPoint(x: start.x + 160, y: start.y + 100)
+        window.setFrameOrigin(moved)   // 等同拖动过程中的一次移动（会触发 windowDidMove）
+
+        var shorter = render
+        shorter.characters = Array("1:23")   // 位数变少 → contentSize 变小，走 sizeChanged 分支
+        let expected = shorter.metrics.contentSize(
+            slots: shorter.slotCount,
+            colons: shorter.colonCount,
+            showDate: shorter.dateLine != nil,
+            showBottom: shorter.bottomLine != nil
         )
+        update(render: shorter, behavior: behavior, placements: lastPlacements)
+
+        let after = window.frame
+        let stayed = abs(after.origin.x - moved.x) <= 1 && abs(after.origin.y - moved.y) <= 1
+        let resized = abs(after.width - expected.width) <= 1 && abs(after.height - expected.height) <= 1
+
+        // 第二阶段：走一遍"按下 → 移动 → 松手"的通知链，确认松手就把位置记进 placements。
+        let second = NSPoint(x: start.x + 60, y: start.y + 40)
+        dragCatcher.onDragBegan?()
+        window.setFrameOrigin(second)
+        dragCatcher.onDragEnded?()
+        let savedOrigin = lastPlacements[Self.screenID(screen)]
+        let saved = savedOrigin.map {
+            abs($0.x - Double(second.x)) <= 1 && abs($0.y - Double(second.y)) <= 1
+        } ?? false
+
+        let report = "DRAGTEST stayed=\(stayed) resized=\(resized) saved=\(saved) "
+            + "moved=\(NSStringFromPoint(moved)) after=\(NSStringFromRect(after))"
+
+        // 还原，别把自检位置写进用户设置
+        persistWorkItem?.cancel()
+        apply(frame: before)
+        update(render: render, behavior: behavior, placements: lastPlacements)
+        return report
     }
 
     /// 自检：确认拖拽层在内容之上、可见、且能命中（用于 --selftest-hit）。
