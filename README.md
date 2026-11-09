@@ -22,6 +22,17 @@ macOS 菜单栏番茄钟 + 桌面翻转时钟挂件。常驻菜单栏计时，�
 - 显示项：秒、日期行、底行（周/日或专注进度）、24/12 小时制、冒号闪烁、小时前导零
 - 设置面板改任何一项都实时生效，300ms 后落盘
 
+## 下载
+
+[Releases](https://github.com/weavingtan/TimeFlip/releases/latest) 里有打包好的 `TimeFlip-1.0.0-macos.zip`（macOS 14+；ad-hoc 签名、未公证）。
+解压后把 `TimeFlip.app` 拖进「应用程序」；首次打开若提示「无法验证开发者」，右键 →「打开」，或先执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/TimeFlip.app
+```
+
+它是纯菜单栏应用：启动后没有 Dock 图标、没有窗口，看屏幕右上角的图标 —— 左键 → 计时面板，右键 → 设置 / 显示隐藏桌面时钟 / 退出。
+
 ## 构建与运行
 
 本机只需要 Command Line Tools（不需要 10GB 的 Xcode）：
