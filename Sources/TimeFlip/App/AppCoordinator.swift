@@ -1,0 +1,280 @@
+import AppKit
+import Foundation
+
+enum AppPaths {
+    static var supportDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory())
+        return base.appendingPathComponent("TimeFlip", isDirectory: true)
+    }
+}
+
+@MainActor
+final class AppCoordinator: NSObject {
+    private let store: SettingsStore
+    private let engine: TimerEngine
+    private let model: AppModel
+
+    private var statusItemController: StatusItemController?
+    private var clockController: FloatingClockWindowController?
+    private var settingsController: SettingsWindowController?
+    private var hotKey: HotKey?
+    private let chime = ChimePlayer()
+    private let notifier = Notifier()
+    private var tickTimer: Timer?
+    private var saveWorkItem: DispatchWorkItem?
+
+    override init() {
+        let store = SettingsStore(directory: AppPaths.supportDirectory)
+        store.load()
+
+        self.store = store
+        let timerSettings = store.settings.timer
+        self.engine = TimerEngine(
+            durations: timerSettings.durations,
+            autoStartNext: timerSettings.autoStartNext
+        )
+        self.model = AppModel(snapshot: engine.snapshot, settings: store.settings)
+        super.init()
+    }
+
+    func start() {
+        wireEngine()
+        wireActions()
+
+        statusItemController = StatusItemController(model: model)
+
+        let clock = FloatingClockWindowController()
+        clock.onMove = { [weak self] screenID, origin in
+            self?.persistPlacement(screenID: screenID, origin: origin)
+        }
+        clockController = clock
+
+        registerHotKey()
+        notifier.requestAuthorization()
+        updateStatusItem()
+        refreshClock()
+        startTicking()
+    }
+
+    // MARK: - 装配
+
+    private func wireEngine() {
+        engine.onChange = { [weak self] snapshot in
+            DispatchQueue.main.async {
+                self?.handleSnapshot(snapshot)
+            }
+        }
+        engine.onPhaseTransition = { [weak self] transition in
+            DispatchQueue.main.async {
+                self?.handleTransition(transition)
+            }
+        }
+    }
+
+    private func wireActions() {
+        model.toggle = { [weak self] in self?.toggleTimer() }
+        model.skip = { [weak self] in self?.engine.skip() }
+        model.reset = { [weak self] in self?.engine.reset() }
+        model.startPreset = { [weak self] minutes in self?.engine.startCustom(minutes: minutes) }
+        model.startCustom = { [weak self] minutes in self?.engine.startCustom(minutes: minutes) }
+        model.openSettings = { [weak self] in self?.openSettings() }
+        model.setClockVisible = { [weak self] visible in self?.setClockVisible(visible) }
+        model.adjustPosition = { [weak self] in self?.clockController?.beginRepositioning() }
+        model.quit = { NSApp.terminate(nil) }
+        model.previewChime = { [weak self] name in self?.chime.play(name: name) }
+        model.commitSettings = { [weak self] in self?.applySettings() }
+    }
+
+    private func registerHotKey() {
+        let spec = model.settings.timer.hotKey
+        let hotKey = HotKey(spec: spec) { [weak self] in
+            DispatchQueue.main.async {
+                self?.toggleTimer()
+            }
+        }
+        self.hotKey = hotKey
+
+        if ProcessInfo.processInfo.environment["TIMEFLIP_DEBUG"] == "1" {
+            NSLog("TimeFlip hotkey registered=%@ spec=%@", hotKey.isRegistered ? "true" : "false", String(describing: spec))
+        }
+
+        if !hotKey.isRegistered, spec != .default {
+            _ = hotKey.reload(spec: .default)
+            model.settings.timer.hotKey = .default
+            showAlert("快捷键注册失败", "原组合可能已被其他应用占用，已回退到 ⌃⌥⌘T。")
+        }
+    }
+
+    // MARK: - 事件
+
+    private func handleSnapshot(_ snapshot: TimerSnapshot) {
+        model.snapshot = snapshot
+        updateStatusItem()
+        refreshClock()
+    }
+
+    private func handleTransition(_ transition: PhaseTransition) {
+        guard transition.reason == .completed else { return }
+
+        chime.play(name: model.settings.timer.soundName)
+
+        let title: String
+        switch transition.from {
+        case .focus: title = "专注完成"
+        case .shortBreak, .longBreak: title = "休息结束"
+        case .idle: title = "时间到"
+        }
+
+        let next = transition.to ?? model.snapshot.nextPhase
+        let body: String
+        if let next {
+            body = "下一阶段：\(displayName(next))"
+        } else {
+            body = "点击菜单栏图标继续"
+        }
+
+        notifier.notify(title: title, body: body)
+        if !notifier.isAuthorized {
+            statusItemController?.flashRed()
+        }
+    }
+
+    private func toggleTimer() {
+        if engine.snapshot.isRunning {
+            engine.pause()
+        } else {
+            engine.start()
+        }
+    }
+
+    // MARK: - 时钟
+
+    private func refreshClock() {
+        updateStatusItem()
+        guard let clockController else { return }
+
+        let now = Date()
+        let appearance = model.settings.appearance
+        let text = ClockRenderModel.displayText(
+            snapshot: model.snapshot,
+            settings: model.settings,
+            now: now,
+            calendar: .current
+        )
+        let characters = Array(text)
+        let slots = characters.filter { $0 != ":" }.count
+        let colons = characters.count - slots
+
+        let metrics: ClockMetrics
+        if model.settings.behavior.form == .fullScreen {
+            let width = NSScreen.main?.frame.width ?? 1512
+            metrics = ClockMetrics.fullScreen(
+                screenWidth: width,
+                appearance: appearance,
+                slots: slots,
+                colons: colons
+            )
+        } else {
+            metrics = ClockMetrics.floating(appearance: appearance)
+        }
+
+        let render = ClockRenderModel.make(
+            snapshot: model.snapshot,
+            settings: model.settings,
+            metrics: metrics,
+            now: now
+        )
+        clockController.update(
+            render: render,
+            behavior: model.settings.behavior,
+            placements: model.settings.windowPlacements
+        )
+    }
+
+    private func updateStatusItem() {
+        statusItemController?.update(snapshot: model.snapshot, settings: model.settings)
+    }
+
+    private func setClockVisible(_ visible: Bool) {
+        model.settings.behavior.visible = visible
+        model.clockVisible = visible
+        refreshClock()
+        scheduleSave()
+    }
+
+    private func persistPlacement(screenID: String, origin: WindowOrigin) {
+        model.settings.windowPlacements[screenID] = origin
+        scheduleSave()
+    }
+
+    // MARK: - 设置
+
+    private func applySettings() {
+        let settings = model.settings
+        engine.autoStartNext = settings.timer.autoStartNext
+        engine.updateDurations(settings.timer.durations)
+        model.clockVisible = settings.behavior.visible
+
+        if let hotKey, !hotKey.reload(spec: settings.timer.hotKey), settings.timer.hotKey != .default {
+            _ = hotKey.reload(spec: .default)
+            model.settings.timer.hotKey = .default
+        }
+
+        refreshClock()
+        scheduleSave()
+    }
+
+    private func scheduleSave() {
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            _ = try? self.store.update { settings in
+                settings = self.model.settings
+            }
+        }
+        saveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    func openSettings() {
+        if settingsController == nil {
+            settingsController = SettingsWindowController(model: model)
+        }
+        settingsController?.show()
+    }
+
+    // MARK: - 定时器
+
+    private func startTicking() {
+        tickTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, target: self, selector: #selector(onTick), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        tickTimer = timer
+    }
+
+    @objc private func onTick() {
+        engine.tick()
+        refreshClock()
+    }
+
+    // MARK: - 辅助
+
+    private func displayName(_ phase: TimerPhase) -> String {
+        switch phase {
+        case .focus: return "专注"
+        case .shortBreak: return "短休"
+        case .longBreak: return "长休"
+        case .idle: return "空闲"
+        }
+    }
+
+    private func showAlert(_ title: String, _ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+    }
+}

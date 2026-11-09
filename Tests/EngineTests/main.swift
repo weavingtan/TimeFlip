@@ -278,7 +278,7 @@ func testColorHex() {
 func testSettingsRoundTrip() {
     let dir = makeTempDir()
     let store = SettingsStore(directory: dir)
-    try? store.update { settings in
+    _ = try? store.update { settings in
         settings.appearance.fontSize = 120
         settings.behavior.layer = .floating
         settings.windowPlacements["SCREEN-A"] = WindowOrigin(x: 10, y: 20)

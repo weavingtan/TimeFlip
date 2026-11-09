@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# 端到端冒烟：单元测试 → 构建 → 离屏渲染 → 真实窗口层级/尺寸断言 → 还原用户设置。
+# 注意：本机 screencapture 受 TCC 限制只能拍到壁纸，所以视觉核对走 --render-preview。
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+APP="dist/TimeFlip.app"
+BIN="$APP/Contents/MacOS/TimeFlip"
+OUT="/tmp/timeflip-smoke"
+LEVEL=$(( -2147483603 + 1 ))   # kCGDesktopIconWindowLevel + 1
+SETTINGS="$HOME/Library/Application Support/TimeFlip/settings.json"
+
+cleanup() {
+  osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
+  pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
+  python3 - "$SETTINGS" <<'PY'
+import json, os, sys
+target = sys.argv[1]
+backup = "/tmp/timeflip-smoke-backup.json"
+if os.path.exists(backup):
+    with open(backup) as f:
+        data = f.read()
+    with open(target, "w") as f:
+        f.write(data)
+    os.remove(backup)
+PY
+}
+trap cleanup EXIT
+
+echo "== 1/5 引擎测试"
+./scripts/test.sh | tail -3
+
+echo "== 2/5 构建"
+./scripts/build-app.sh | tail -1
+
+echo "== 3/5 离屏渲染（无需屏幕录制权限）"
+"$BIN" --render-preview "$OUT/preview" | tail -4
+"$BIN" --render-settings "$OUT/settings" | tail -4
+test -f "$OUT/preview/1-flip-light.png"
+test -f "$OUT/settings/menu-panel.png"
+
+echo "== 4/5 窗口断言"
+xcrun --sdk macosx swiftc -O scripts/window-check.swift -o .build/window-check
+CHECK=".build/window-check"
+
+mkdir -p "$(dirname "$SETTINGS")"
+if [ -f "$SETTINGS" ]; then
+  cp "$SETTINGS" /tmp/timeflip-smoke-backup.json
+fi
+
+run_case() {
+  local mode="$1"; local form="$2"; local layer="$3"
+  osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
+  pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
+  sleep 1
+  python3 - "$SETTINGS" "$form" "$layer" <<'PY'
+import json, os, sys
+path, form, layer = sys.argv[1], sys.argv[2], sys.argv[3]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+json.dump({
+    "version": 1,
+    "behavior": {"showMode": "auto", "form": form, "layer": layer, "visible": True},
+}, open(path, "w"), ensure_ascii=False, indent=2)
+PY
+  env TIMEFLIP_DEBUG=1 "$BIN" > "/tmp/timeflip-smoke-$mode.log" 2>&1 &
+  sleep 3
+  echo "-- 模式: $mode"
+  "$CHECK" "$LEVEL" "$mode"
+  grep -o "hotkey registered=[a-z]*" "/tmp/timeflip-smoke-$mode.log" | head -1 || true
+}
+
+run_case floating floating desktop
+run_case full fullScreen desktop
+
+echo "-- 模式: settings（真实打开设置窗口，验证 SwiftUI 面板不崩）"
+osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
+pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
+sleep 1
+python3 - "$SETTINGS" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+json.dump({
+    "version": 1,
+    "behavior": {"showMode": "auto", "form": "floating", "layer": "desktop", "visible": True},
+}, open(path, "w"), ensure_ascii=False, indent=2)
+PY
+env TIMEFLIP_DEBUG=1 "$BIN" --open-settings > /tmp/timeflip-smoke-settings.log 2>&1 &
+sleep 3
+"$CHECK" "$LEVEL" floating --require-settings-window
+
+echo "== 5/5 还原设置并退出"
+cleanup
+trap - EXIT
+
+echo "SMOKE PASSED"

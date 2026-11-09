@@ -90,7 +90,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 
 | 维度 | 贴桌面（desktop） | 置顶（floating） |
 |---|---|---|
-| `level` | `NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))`（实测 -2147483623，壁纸之上、桌面图标之下） | `.floating` |
+| `level` | `Int(CGWindowLevelForKey(.desktopIconWindow)) + 1`（实测 -2147483602：在 Finder 桌面窗口 -2147483603 之上，远低于普通窗口 0） | `.floating`（3） |
 | `collectionBehavior` | `[.canJoinAllSpaces, .stationary, .ignoresCycle]` | `[.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]` |
 | `ignoresMouseEvents` | `true`（默认穿透，不挡桌面右键与图标） | `false` |
 | 拖动 | 仅「调整位置」临时态下允许 | 随时可拖（`isMovableByWindowBackground = true`） |
@@ -123,7 +123,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 - 样式二选一：`flip`（卡片 + 分隔缝）与 `digital`（无卡片、纯文字，背景色不生效）。
 
 显示内容的取值规则（`ShowMode`）：
-- `auto`：`focus` / `paused(focus)` → 倒计时剩余 `mm:ss`；`idle` / 休息阶段结束后的空闲 → 当前时间 `HH:mm:ss`（受 `showSeconds` 与 `use24Hour` 影响）。
+- `auto`：任何非空闲阶段（专注 / 短休 / 长休，含暂停）→ 倒计时剩余 `mm:ss`；`idle` → 当前时间 `HH:mm:ss`（受 `showSeconds` 与 `use24Hour` 影响）。
 - `countdownOnly`：始终显示剩余时间；空闲时显示 focus 预设时长。
 - `clockOnly`：始终显示当前时间，与计时器状态无关。
 
@@ -185,6 +185,9 @@ Controller   WindowController    Controller        (HotKey/Chime/
   3. `codesign --force --sign - dist/TimeFlip.app`（ad-hoc）
   4. 产物可直接 `open dist/TimeFlip.app`。
 - `scripts/test.sh`：把引擎源码 + `Tests/EngineTests/main.swift` 编译成 `.build/engine-tests` 并运行；测试框架是自写的 30 行断言器（`check` / `expectEqual`），失败以非零码退出。test.sh 必须先跑引擎源码的「禁止 import SwiftUI/AppKit」检查。
+- 开发期离屏渲染（本机 `screencapture` 受 TCC 限制只能拍到壁纸）：
+  - `TimeFlip --render-preview <dir>`：翻转卡片（浅/深）、纯数字、仅时钟四张挂件 PNG。
+  - `TimeFlip --render-settings <dir>`：菜单栏弹窗 + 设置面板三页 PNG（NS 控件显示为占位块属正常）。
 
 ## 8. 测试策略
 
@@ -198,13 +201,15 @@ Controller   WindowController    Controller        (HotKey/Chime/
 7. `SettingsStore` 编解码往返、缺失字段用默认值、损坏 JSON 走兜底。
 8. 字号自适应：给定屏宽与位数反算卡片尺寸落在合理区间；极端小屏不出现负值。
 
-### 冒烟（脚本，人工看图）
-1. `scripts/build-app.sh && open dist/TimeFlip.app`。
-2. 用 `CGWindowListCopyWindowInfo` 断言存在 owner=TimeFlip 的窗口，层级等于桌面层（-2147483623），尺寸等于主屏 frame。
-3. `screencapture` 抓桌面 → 人工确认翻转卡片、日期行、配色。
-4. 切「置顶 + 浮动」后再次断言层级 = 3、尺寸变化，抓图确认。
-5. 菜单栏：抓取菜单栏区域截图确认圆环进度与倒计时文本。
-6. 清理：退出 App 前恢复默认设置，避免污染用户配置。
+### 冒烟（`scripts/smoke.sh`）
+1. 跑 `scripts/test.sh`，非零即失败。
+2. `scripts/build-app.sh` 构建。
+3. 离屏渲染挂件与设置面板 PNG（绕开 TCC，不依赖屏幕录制权限）。
+4. 用 `CGWindowListCopyWindowInfo` 断言：存在 owner=TimeFlip、层级 = `desktopIcon+1` 的窗口，onscreen=true，alpha>0，尺寸合理；菜单栏状态项窗口存在。
+   - 铺满模式：窗口尺寸 == 主屏尺寸（主屏尺寸从 `Wallpaper`（层级 -2147483625、原点 0,0）窗口推导，避免多屏 union 干扰）。
+   - 浮动模式：窗口小于主屏。
+5. 同时检查 `TIMEFLIP_DEBUG=1` 日志里的 `hotkey registered=true`。
+6. 清理：还原 settings.json（先备份）、退出 App。
 
 ### 手动验收清单（写进 README 前不单独建文档）
 自动开始、声音、通知降级、快捷键、开机自启、多屏拖动记忆、桌面穿透。
@@ -213,7 +218,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| 桌面层窗口在部分系统版本被 Finder 图标窗口盖住 | 挂件不可见 | 已确认层级常量；若被盖，回退到 `desktopIcon + 1` 并把图标区域让开（顶部/右下留边距） |
+| 桌面层窗口被 Finder 图标窗口盖住 | 挂件不可见 | 已实测：Finder 桌面窗口在 -2147483603，`desktopWindow` 层级（-2147483623）会被完整遮住 → 改用 `desktopIcon + 1`，`occlusionState` 验证未被遮挡，且仍在所有普通窗口之下 |
 | ad-hoc 签名下通知授权失败 | 无系统通知 | 已设计降级：声音 + 图标变红 + 闪边框 |
 | 全屏 App / 多空间下窗口丢失 | 挂件消失 | `canJoinAllSpaces` + 空间切换通知里 `orderFrontRegardless` |
 | SwiftUI 3D 动画在低端机掉帧 | 翻页卡顿 | 只动画变化位、固定 180ms、必要时降级为淡入 |
