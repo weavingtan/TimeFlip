@@ -94,19 +94,40 @@ enum PreviewRenderer {
         }
     }
 
+    /// 翻页角度展开图：7 个关键角度 × 不透明/半透明两种卡面，
+    /// 用来核对"揭开"是否严丝合缝（不漏背景、不重影），且半透明卡面下依然没有旧数字透出。
     private static func writeFlipAngles(to url: URL) {
-        var settings = TimeFlipSettings()
-        settings.appearance.fontSize = 140
-        let metrics = ClockMetrics.floating(appearance: settings.appearance)
-        let angles: [Double] = [0, -45, -90, -135, -180]
+        let angles: [Double] = [0, -30, -60, -90, -120, -150, -180]
+        let appearances: [ClockAppearance] = [1.0, 0.35].map { opacity in
+            var settings = TimeFlipSettings()
+            settings.appearance.fontSize = 140
+            settings.appearance.backgroundOpacity = opacity
+            return settings.appearance
+        }
 
-        let row = HStack(spacing: 34) {
+        let rows = VStack(alignment: .leading, spacing: 28) {
+            ForEach(appearances.indices, id: \.self) { row in
+                flipRow(appearance: appearances[row], angles: angles)
+            }
+        }
+        .padding(48)
+        .background(Color(white: 0.24))
+
+        if let png = pngData(for: rows) {
+            try? png.write(to: url)
+            print("wrote \(url.path)")
+        }
+    }
+
+    private static func flipRow(appearance: ClockAppearance, angles: [Double]) -> some View {
+        let metrics = ClockMetrics.floating(appearance: appearance)
+        return HStack(spacing: 30) {
             ForEach(angles.indices, id: \.self) { index in
                 VStack(spacing: 10) {
                     FlipDigitView(
                         text: "8",
                         metrics: metrics,
-                        appearance: settings.appearance,
+                        appearance: appearance,
                         previewAngle: angles[index],
                         previewPrevious: "1"
                     )
@@ -115,13 +136,6 @@ enum PreviewRenderer {
                         .foregroundStyle(.white.opacity(0.6))
                 }
             }
-        }
-        .padding(48)
-        .background(Color(white: 0.24))
-
-        if let png = pngData(for: row) {
-            try? png.write(to: url)
-            print("wrote \(url.path)")
         }
     }
 
