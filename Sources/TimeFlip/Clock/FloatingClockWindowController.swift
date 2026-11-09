@@ -11,7 +11,8 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
     )
 
     private let window: NSWindow
-    private var hosting: NSHostingView<AnyView>?
+    private var hosting: NSHostingView<ClockHostView>?
+    private var display: ClockDisplayModel?
     private var lastRender: ClockRenderModel?
     private var lastBehavior: ClockBehavior?
     private var lastPlacements: [String: WindowOrigin] = [:]
@@ -140,31 +141,20 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
     }
 
     private func setRoot(render: ClockRenderModel, fill: CGSize) {
-        let overlay: AnyView? = isRepositioning
-            ? AnyView(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 5]))
-                    .padding(3)
-            )
-            : nil
-
-        let content = FlipClockView(model: render)
-            .frame(width: fill.width, height: fill.height)
-            .overlay {
-                if let overlay {
-                    overlay
-                }
-            }
-
-        if let hosting {
-            hosting.frame = NSRect(origin: .zero, size: fill)
-            hosting.rootView = AnyView(content)
-        } else {
-            let host = NSHostingView(rootView: AnyView(content))
-            host.frame = NSRect(origin: .zero, size: fill)
-            window.contentView = host
-            hosting = host
+        if let display {
+            display.render = render
+            display.fill = fill
+            display.repositioning = isRepositioning
+            hosting?.frame = NSRect(origin: .zero, size: fill)
+            return
         }
+
+        let display = ClockDisplayModel(render: render, fill: fill, repositioning: isRepositioning)
+        let host = NSHostingView(rootView: ClockHostView(display: display))
+        host.frame = NSRect(origin: .zero, size: fill)
+        window.contentView = host
+        hosting = host
+        self.display = display
     }
 
     private func applyLayer(_ behavior: ClockBehavior) {
