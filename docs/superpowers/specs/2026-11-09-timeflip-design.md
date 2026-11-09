@@ -29,7 +29,7 @@
 
 ## 4. 架构总览
 
-单个 Swift Package 可执行目标 + 打包脚本产出 `.app`。
+单个可执行程序（`swiftc` 直接编译，不用 SwiftPM）+ 打包脚本产出 `.app`。
 
 ```
 TimeFlipEngine (纯逻辑，无 AppKit)   ←─ swift test 覆盖
@@ -169,17 +169,26 @@ Controller   WindowController    Controller        (HotKey/Chime/
 
 ## 7. 构建与运行
 
-- `Package.swift`：`platforms: [.macOS(.v14)]`，可执行目标 `TimeFlip`，测试目标 `TimeFlipEngineTests`；逻辑代码拆到 `Sources/TimeFlipEngine`（library），保证测试不链接 AppKit。
+本机实测结论（2026-11-09，仅有 Command Line Tools）：
+- `swift build` / `swift test` **不可用**：SwiftPM manifest 链接报 `Undefined symbols: PackageDescription.Package.__allocating_init`。
+- `XCTest` 模块**不存在**（`no such module 'XCTest'`），无法用 XCTest 写单测。
+- `swiftc` + SwiftUI/AppKit 可正常编译链接，`swiftc` 产物可直接运行。
+
+因此构建与测试都不走 SwiftPM：
+
+- 源码分层（目录即模块边界，不产生 module）：
+  - `Sources/TimeFlipEngine/`：纯 Foundation，不得 import SwiftUI/AppKit（构建脚本会 grep 校验）。
+  - `Sources/TimeFlip/`：AppKit/SwiftUI 应用层。
 - `scripts/build-app.sh`：
-  1. `swift build -c release --product TimeFlip`
-  2. 组装 `dist/TimeFlip.app/Contents/{MacOS,Resources}`，写入 `Info.plist`（`LSUIElement=true`、`CFBundleIdentifier=com.weaving.timeflip`、`NSHighResolutionCapable=true`、`LSMinimumSystemVersion=14.0`、`CFBundleShortVersionString`）
-  3. `codesign --force --deep --sign - dist/TimeFlip.app`（ad-hoc）
-  4. 输出可直接 `open dist/TimeFlip.app` 的产物。
-- 本机无 Xcode，全部用 `xcrun --sdk macosx swiftc` / `swift build`；**不使用 xcodeproj**。
+  1. `xcrun --sdk macosx swiftc -swift-version 6 -O -parse-as-library Sources/TimeFlipEngine/*.swift Sources/TimeFlip/**/*.swift -o dist/TimeFlip.app/Contents/MacOS/TimeFlip`
+  2. 组装 `Contents/{MacOS,Resources}`，写入 `Info.plist`（`LSUIElement=true`、`CFBundleIdentifier=com.weaving.timeflip`、`CFBundleExecutable=TimeFlip`、`NSHighResolutionCapable=true`、`LSMinimumSystemVersion=14.0`、`CFBundleShortVersionString`）
+  3. `codesign --force --sign - dist/TimeFlip.app`（ad-hoc）
+  4. 产物可直接 `open dist/TimeFlip.app`。
+- `scripts/test.sh`：把引擎源码 + `Tests/EngineTests/main.swift` 编译成 `.build/engine-tests` 并运行；测试框架是自写的 30 行断言器（`check` / `expectEqual`），失败以非零码退出。test.sh 必须先跑引擎源码的「禁止 import SwiftUI/AppKit」检查。
 
 ## 8. 测试策略
 
-### 单元测试（swift test）
+### 单元测试（`scripts/test.sh`，自写断言 runner）
 1. 状态机全路径：idle→focus→shortBreak→…→第 4 轮→longBreak→focus。
 2. 暂停/恢复保持剩余秒；暂停中 sleep 跨越很长时间后 resume 不跳阶段。
 3. 睡眠补时：注入 now 前进 2 小时，remaining 归零且只触发一次 completed。
@@ -212,7 +221,7 @@ Controller   WindowController    Controller        (HotKey/Chime/
 
 ## 10. 里程碑（实现顺序）
 
-1. **M1 引擎**：`TimeFlipEngine` + 全部单测绿灯。
+1. **M1 引擎**：`TimeFlipEngine` + `scripts/test.sh` 全部用例绿灯。
 2. **M2 菜单栏**：StatusItem + 弹窗 + 右键菜单，可用键盘驱动。
 3. **M3 桌面挂件**：窗口层级/穿透/拖动 + FlipClockView 静态渲染 + 翻页动画。
 4. **M4 设置**：三页设置面板 + 实时预览 + 持久化 + 多屏位置。
