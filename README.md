@@ -41,7 +41,7 @@ macOS 菜单栏番茄钟 + 桌面翻转时钟挂件。常驻菜单栏计时，�
 
 ## 下载
 
-[Releases](https://github.com/weavingtan/TimeFlip/releases/latest) 里有打包好的 `TimeFlip-1.2.1-macos.zip`（macOS 14+；ad-hoc 签名、未公证）。
+[Releases](https://github.com/weavingtan/TimeFlip/releases/latest) 里有打包好的 `TimeFlip-1.2.2-macos.zip`（macOS 14+；ad-hoc 签名、未公证）。
 解压后把 `TimeFlip.app` 拖进「应用程序」；首次打开若提示「无法验证开发者」，右键 →「打开」，或先执行：
 
 ```bash
