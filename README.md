@@ -70,6 +70,17 @@ open dist/TimeFlip.app      # 启动（无 Dock 图标，只在菜单栏）
 
 冒烟脚本会把设置文件临时改成测试值，结束后自动还原。
 
+## 发版
+
+```bash
+./scripts/release.sh 1.2.3            # 改版本号 + 断言 + 冒烟 + 打包 + 提交 + 打标签 + 建 Release
+./scripts/release.sh                  # 不写版本号则自动 patch +1
+./scripts/release.sh 1.2.3 --dry-run  # 只改版本号并打包校验，不提交不推送
+```
+
+发布说明写在 `docs/releases/v1.2.3.md`（可选，会一起提交）；不写就按上个 tag 之后的提交标题自动生成。
+`--install` 可以顺便把新版本覆盖安装到 `/Applications`。
+
 ### 开发期离屏渲染
 
 `screencapture` 在本机受屏幕录制权限限制（只能拍到壁纸），因此视觉核对走 App 自带的离屏渲染：
