@@ -410,6 +410,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.leading, 6)
                     Picker("", selection: model.binding(\.appearance.fontWeight)) {
+                        Text("常规").tag(ClockFontWeight.regular)
                         Text("粗体").tag(ClockFontWeight.bold)
                         Text("特粗").tag(ClockFontWeight.heavy)
                         Text("黑体").tag(ClockFontWeight.black)

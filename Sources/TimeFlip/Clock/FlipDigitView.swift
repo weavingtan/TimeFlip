@@ -229,11 +229,15 @@ struct FlipDigitView: View {
                 endPoint: .bottom
             )
         case .glass:
-            LinearGradient(
-                colors: [Color.white.opacity(0.34), Color.white.opacity(0.06), Color.white.opacity(0.16)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            // 玻璃卡本身几乎透明，压一层淡暗底，白字才有对比。
+            ZStack {
+                Color.black.opacity(0.14)
+                LinearGradient(
+                    colors: [Color.white.opacity(0.34), Color.white.opacity(0.06), Color.white.opacity(0.16)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
         case .metal:
             LinearGradient(
                 colors: [
@@ -349,6 +353,8 @@ struct FlipDigitView: View {
         Text(value)
             .font(.custom(appearance.fontFamily, size: metrics.fontSize).weight(appearance.fontWeight.swiftUI))
             .foregroundStyle(appearance.textColor.color)
+            // 文字行框含 ascender/descender，直接居中会让字面整体偏下 3% 左右。
+            .offset(y: -metrics.fontSize * 0.03)
             .frame(width: metrics.digitWidth, height: metrics.digitHeight)
             .frame(width: metrics.digitWidth, height: halfHeight, alignment: top ? .top : .bottom)
             .clipped()

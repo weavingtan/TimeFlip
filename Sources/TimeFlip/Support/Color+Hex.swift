@@ -27,6 +27,7 @@ extension RGBAColor {
 extension ClockFontWeight {
     var swiftUI: Font.Weight {
         switch self {
+        case .regular: return .regular
         case .bold: return .bold
         case .heavy: return .heavy
         case .black: return .black
@@ -35,6 +36,7 @@ extension ClockFontWeight {
 
     var nsWeight: NSFont.Weight {
         switch self {
+        case .regular: return .regular
         case .bold: return .bold
         case .heavy: return .heavy
         case .black: return .black

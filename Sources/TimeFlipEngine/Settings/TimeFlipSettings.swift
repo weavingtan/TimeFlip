@@ -60,6 +60,7 @@ public enum ClockMaterial: String, Codable, Sendable, CaseIterable {
 }
 
 public enum ClockFontWeight: String, Codable, Sendable {
+    case regular
     case bold
     case heavy
     case black

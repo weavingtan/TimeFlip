@@ -29,23 +29,55 @@ struct FlipClockView: View {
     private var containerWidth: CGFloat { rowWidth + metrics.chassisPadding * 2 }
 
     private var captionFont: Font {
-        .system(size: metrics.fontSize * 0.17, weight: .semibold, design: .rounded)
+        .system(size: metrics.fontSize * 0.20, weight: .semibold, design: .rounded)
     }
 
+    private var hasChassis: Bool { metrics.chassisPadding > 0 }
+
+    /// 机身是深色（浅色卡），日期与底行要印成浅色才看得见；
+    /// 无机身时退回字体色，并用卡片底色垫一条窄纸带，避免深色字贴在深色壁纸上看不见。
+    private var chassisIsDark: Bool { appearance.backgroundColor.luminance >= 0.42 }
+
+    private var captionColor: Color {
+        if hasChassis {
+            return chassisIsDark ? Color.white.opacity(0.60) : Color.black.opacity(0.42)
+        }
+        return appearance.textColor.color.opacity(0.72)
+    }
+
+    private var captionBackdrop: Color {
+        guard hasChassis == false, appearance.backgroundOpacity > 0.05 else { return .clear }
+        return appearance.backgroundColor.color(opacity: appearance.backgroundOpacity * 0.92)
+    }
+
+    /// 反向描边：深色字配浅描边、浅色字配深描边。
+    /// 无机身的主题（纯数字极简）没有纸带垫底，靠这一层保证在任何壁纸上都读得出来。
+    private var captionHalo: Color {
+        appearance.textColor.luminance > 0.55
+            ? Color.black.opacity(0.45)
+            : Color.white.opacity(0.45)
+    }
+
+    private var captionHaloRadius: CGFloat { max(1.5, metrics.fontSize * 0.014) }
+
     private var content: some View {
-        VStack(spacing: metrics.spacing * 0.9) {
+        VStack(spacing: metrics.captionGap) {
             if let date = model.dateLine {
                 HStack(spacing: 8) {
                     Text(date.left)
-                        .tracking(metrics.fontSize * 0.014)
+                        .tracking(metrics.fontSize * 0.012)
                     Spacer(minLength: 0)
                     Text(date.right)
-                        .tracking(metrics.fontSize * 0.026)
+                        .tracking(metrics.fontSize * 0.022)
                 }
                 .textCase(.uppercase)
                 .font(captionFont)
-                .foregroundStyle(appearance.textColor.color.opacity(0.58))
-                .frame(width: containerWidth)
+                .foregroundStyle(captionColor)
+                .shadow(color: captionHalo, radius: captionHaloRadius)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: containerWidth, height: metrics.captionHeight)
+                .background(captionBackdrop.clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous)))
             }
 
             if appearance.style == .flip {
@@ -57,10 +89,14 @@ struct FlipClockView: View {
             if let bottom = model.bottomLine {
                 Text(bottom)
                     .textCase(.uppercase)
-                    .font(.system(size: metrics.fontSize * 0.15, weight: .medium, design: .rounded))
-                    .tracking(metrics.fontSize * 0.02)
-                    .foregroundStyle(appearance.textColor.color.opacity(0.5))
-                    .frame(width: containerWidth)
+                    .font(.system(size: metrics.fontSize * 0.18, weight: .medium, design: .rounded))
+                    .tracking(metrics.fontSize * 0.018)
+                    .foregroundStyle(captionColor)
+                    .shadow(color: captionHalo, radius: captionHaloRadius)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(width: containerWidth, height: metrics.captionHeight)
+                    .background(captionBackdrop.clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous)))
             }
         }
     }
@@ -82,7 +118,7 @@ struct FlipClockView: View {
             }
         }
         .padding(.horizontal, metrics.chassisPadding)
-        .padding(.vertical, metrics.chassisPadding * 1.15)
+        .padding(.vertical, metrics.chassisPadding)
         .background { chassis }
     }
 
@@ -124,8 +160,9 @@ struct FlipClockView: View {
     private var chassisColor: Color {
         let base = appearance.backgroundColor
         let isDarkCard = base.luminance < 0.42
-        let factor = isDarkCard ? 1.55 : 0.34
-        let warm = isDarkCard ? 1.0 : 0.92
+        // 浅卡压到 0.26 才是"黑机身"，0.34 会发灰发脏；暖色再收一点，避免偏黄。
+        let factor = isDarkCard ? 1.55 : 0.26
+        let warm = isDarkCard ? 1.0 : 0.96
         return Color(
             .sRGB,
             red: min(1, base.red * factor),
@@ -140,8 +177,8 @@ struct FlipClockView: View {
     }
 
     private var colon: some View {
-        let dot = metrics.digitWidth * 0.15
-        return VStack(spacing: metrics.digitHeight * 0.22) {
+        let dot = metrics.digitWidth * 0.12
+        return VStack(spacing: metrics.digitHeight * 0.20) {
             Circle()
                 .fill(appearance.textColor.color)
                 .frame(width: dot, height: dot)
@@ -169,6 +206,8 @@ struct FlipClockView: View {
         .font(.custom(appearance.fontFamily, size: metrics.fontSize).weight(appearance.fontWeight.swiftUI))
         .kerning(metrics.fontSize * 0.01)
         .monospacedDigit()
-        .padding(.horizontal, metrics.spacing)
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .frame(width: rowWidth)
     }
 }

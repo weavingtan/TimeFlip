@@ -39,7 +39,14 @@ enum PreviewRenderer {
         write(model: render(settings: darkCards, snapshot: snapshot), to: directory.appendingPathComponent("3-flip-dark.png"))
 
         writeFlipAngles(to: directory.appendingPathComponent("5-flip-angles.png"))
-        writeThemeStrip(to: directory.appendingPathComponent("6-themes.png"))
+        writeThemeStrip(to: directory.appendingPathComponent("6-themes.png"), fontSize: 60, columns: 4)
+        // 用用户实际会用的字号（241pt）再画一遍：小字号看不出数字顶出卡片的问题。
+        writeThemeStrip(
+            to: directory.appendingPathComponent("6b-themes-large.png"),
+            fontSize: 150,
+            columns: 2,
+            canvasWidth: 1600
+        )
         writeShareCard(to: directory.appendingPathComponent("7-share-card.png"))
 
         snapshot.phase = .idle
@@ -187,7 +194,12 @@ enum PreviewRenderer {
     }
 
     /// 八套预设一览：核对每套的卡面材质、机身与配色是否真的分得开。
-    private static func writeThemeStrip(to url: URL) {
+    private static func writeThemeStrip(
+        to url: URL,
+        fontSize: Double,
+        columns: Int,
+        canvasWidth: CGFloat = 1120
+    ) {
         let snapshot = TimerSnapshot(
             phase: .focus, isRunning: true, isPaused: false, isFinished: false,
             remaining: 1439, total: 1500, completedFocusSessions: 2,
@@ -195,15 +207,15 @@ enum PreviewRenderer {
         )
 
         let grid = LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), spacing: 18), count: 4),
-            spacing: 18
+            columns: Array(repeating: GridItem(.flexible(), spacing: 24), count: columns),
+            spacing: 24
         ) {
             ForEach(ThemePreset.all) { preset in
-                themeTile(preset, snapshot: snapshot)
+                themeTile(preset, snapshot: snapshot, fontSize: fontSize)
             }
         }
-        .padding(28)
-        .frame(width: 1120)
+        .padding(32)
+        .frame(width: canvasWidth)
         .background(Color(white: 0.12))
 
         if let png = pngData(for: grid) {
@@ -212,10 +224,14 @@ enum PreviewRenderer {
         }
     }
 
-    private static func themeTile(_ preset: ThemePreset, snapshot: TimerSnapshot) -> some View {
+    private static func themeTile(
+        _ preset: ThemePreset,
+        snapshot: TimerSnapshot,
+        fontSize: Double
+    ) -> some View {
         var settings = TimeFlipSettings()
         settings.appearance = preset.applied(to: settings.appearance)
-        settings.appearance.fontSize = 32
+        settings.appearance.fontSize = fontSize
         let metrics = ClockMetrics.floating(appearance: settings.appearance)
         let model = ClockRenderModel.make(snapshot: snapshot, settings: settings, metrics: metrics)
 
