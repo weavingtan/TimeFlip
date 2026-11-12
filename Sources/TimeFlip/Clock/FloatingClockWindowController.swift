@@ -200,6 +200,9 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
     private func setRoot(render: ClockRenderModel, fill: CGSize, draggable: Bool) {
         dragCatcher.isHidden = !draggable
         window.isMovableByWindowBackground = false
+        // 铺满模式下窗口等于整块屏幕，必须让鼠标穿透：
+        // 否则桌面图标点不到、右键菜单出不来，「始终置顶 + 铺满」更是把全屏点击都吃掉。
+        window.ignoresMouseEvents = !draggable
 
         if let display {
             display.render = render
@@ -215,6 +218,14 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
         hosting = host
         self.display = display
         layoutContent()
+    }
+
+    /// 设置被恢复默认时调用：下次 update 重新走「首次布局」，回到默认位置。
+    func resetPosition() {
+        didInitialLayout = false
+        lastForm = nil
+        lastPlacements = [:]
+        persistWorkItem?.cancel()
     }
 
     private func applyLayer(_ behavior: ClockBehavior) {

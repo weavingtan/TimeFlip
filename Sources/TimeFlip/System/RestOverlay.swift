@@ -35,7 +35,7 @@ final class BreakOverlayController {
         for screen in NSScreen.screens {
             let window = OverlayWindow(
                 contentRect: screen.frame,
-                styleMask: [.borderless],
+                styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
             )
@@ -51,7 +51,8 @@ final class BreakOverlayController {
             windows.append(window)
         }
 
-        NSApp.activate(ignoringOtherApps: true)
+        // 不 activate：遮罩只负责盖住屏幕，不该把用户正在打字的 App 切走。
+        // nonactivatingPanel 让「提前结束休息」的按钮照样能点。
         windows.first?.makeKey()
     }
 
@@ -135,7 +136,8 @@ private struct BreakOverlayView: View {
                     Text("起来走走，看看远处")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white.opacity(0.85))
-                    Text("盯着屏幕 25 分钟，眼睛和腰都需要这三分钟。")
+                    // 不写死分钟数：长休 20 分钟、自定义 90 分钟时都不该说「这三分钟」。
+                    Text("离开屏幕一会儿，眼睛和腰都会谢谢你。")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -214,7 +216,13 @@ final class GraceOverlayController {
         onSkip: @escaping () -> Void
     ) {
         hide()
-        let model = GraceModel(remaining: max(0, seconds), style: style)
+        guard seconds > 0 else {
+            // 0 秒表示立即锁屏：别先闪一下窗口、再抢一次焦点。
+            onLock()
+            return
+        }
+
+        let model = GraceModel(remaining: seconds, style: style)
         self.model = model
 
         let window = OverlayWindow(
@@ -257,12 +265,6 @@ final class GraceOverlayController {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKey()
         self.window = window
-
-        guard seconds > 0 else {
-            hide()
-            onLock()
-            return
-        }
 
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in

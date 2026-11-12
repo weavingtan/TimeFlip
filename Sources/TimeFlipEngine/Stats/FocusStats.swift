@@ -67,44 +67,52 @@ public struct FocusStats: Equatable, Sendable {
     ) -> FocusStats {
         let focus = records.filter { $0.phase == .focus }
         let completed = focus.filter(\.completed)
+        // 只有番茄轮次算「完成」：自定义倒计时是临时计时器，不能用来刷每日目标与连续天数。
+        let cycles = completed.filter { !$0.isCustom }
 
         let todayStart = calendar.startOfDay(for: now)
-        /// 今天为 0，昨天为 1，往前递增。
-        func dayOffset(_ date: Date) -> Int {
-            calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: todayStart).day ?? 0
-        }
-
-        func completedRecords(onOffset offset: Int) -> [SessionRecord] {
-            completed.filter { dayOffset($0.startedAt) == offset }
-        }
-
-        let today = completedRecords(onOffset: 0)
         let weekInterval = calendar.dateInterval(of: .weekOfYear, for: now)
+
+        func offsetStart(_ offset: Int) -> Date {
+            calendar.date(byAdding: .day, value: -offset, to: todayStart) ?? todayStart
+        }
+
+        // 先按「当天零点」建桶，避免每条记录都做一次次日历运算（原来是 O(天数 × 记录数)）。
+        var focusSecondsByDay: [Date: Int] = [:]
+        var cycleSessionsByDay: [Date: Int] = [:]
+        for record in completed {
+            let day = calendar.startOfDay(for: record.startedAt)
+            focusSecondsByDay[day, default: 0] += record.actualSeconds
+            if !record.isCustom {
+                cycleSessionsByDay[day, default: 0] += 1
+            }
+        }
+
         let weekRecords = completed.filter { weekInterval?.contains($0.startedAt) ?? false }
+        let weekCycles = cycles.filter { weekInterval?.contains($0.startedAt) ?? false }
 
         var buckets: [DayBucket] = []
         for offset in stride(from: 13, through: 0, by: -1) {
-            let day = completedRecords(onOffset: offset)
-            let start = calendar.date(byAdding: .day, value: -offset, to: todayStart) ?? todayStart
+            let start = offsetStart(offset)
             buckets.append(
                 DayBucket(
                     date: start,
-                    focusSeconds: day.reduce(0) { $0 + $1.actualSeconds },
-                    sessions: day.count
+                    focusSeconds: focusSecondsByDay[start] ?? 0,
+                    sessions: cycleSessionsByDay[start] ?? 0
                 )
             )
         }
 
         // 连续天数：今天还没开始专注时，从昨天往前数，避免早上一睁眼看到 streak 归零。
         var streak = 0
-        var offset = completedRecords(onOffset: 0).isEmpty ? 1 : 0
-        while offset < 3_660, !completedRecords(onOffset: offset).isEmpty {
+        var offset = (cycleSessionsByDay[todayStart] ?? 0) > 0 ? 0 : 1
+        while offset < 3_660, (cycleSessionsByDay[offsetStart(offset)] ?? 0) > 0 {
             streak += 1
             offset += 1
         }
 
         var hourHistogram: [Int: Int] = [:]
-        for record in completed {
+        for record in cycles {
             let hour = calendar.component(.hour, from: record.startedAt)
             hourHistogram[hour, default: 0] += 1
         }
@@ -113,16 +121,16 @@ public struct FocusStats: Equatable, Sendable {
         }?.key
 
         return FocusStats(
-            todaySessions: today.count,
-            todayFocusSeconds: today.reduce(0) { $0 + $1.actualSeconds },
-            weekSessions: weekRecords.count,
+            todaySessions: cycleSessionsByDay[todayStart] ?? 0,
+            todayFocusSeconds: focusSecondsByDay[todayStart] ?? 0,
+            weekSessions: weekCycles.count,
             weekFocusSeconds: weekRecords.reduce(0) { $0 + $1.actualSeconds },
             totalFocusSeconds: completed.reduce(0) { $0 + $1.actualSeconds },
             streakDays: streak,
             dailyGoalSessions: max(0, goal),
             last14Days: buckets,
             interruptedCount: focus.count - completed.count,
-            completedCount: completed.count,
+            completedCount: cycles.count,
             bestHour: bestHour
         )
     }

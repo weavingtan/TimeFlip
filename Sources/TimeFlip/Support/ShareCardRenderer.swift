@@ -22,10 +22,17 @@ enum ShareCardRenderer {
         return rep.representation(using: .png, properties: [:])
     }
 
-    /// 存到用户选的路径（默认「桌面」）。取消返回 nil。
+    /// 存到用户选的路径（默认「桌面」）。
+    /// 必须区分「用户取消」和「真的写失败」：取消不该弹错误提示。
+    enum SaveOutcome {
+        case saved(URL)
+        case cancelled
+        case failed
+    }
+
     @discardableResult
-    static func savePNG(stats: FocusStats, now: Date = Date()) -> URL? {
-        guard let data = pngData(stats: stats, now: now) else { return nil }
+    static func savePNG(stats: FocusStats, now: Date = Date()) -> SaveOutcome {
+        guard let data = pngData(stats: stats, now: now) else { return .failed }
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
@@ -36,12 +43,12 @@ enum ShareCardRenderer {
         }
         NSApp.activate(ignoringOtherApps: true)
 
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        guard panel.runModal() == .OK, let url = panel.url else { return .cancelled }
         do {
             try data.write(to: url, options: .atomic)
-            return url
+            return .saved(url)
         } catch {
-            return nil
+            return .failed
         }
     }
 

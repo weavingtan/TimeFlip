@@ -10,7 +10,6 @@ final class AppModel: ObservableObject {
     var toggle: () -> Void = {}
     var skip: () -> Void = {}
     var reset: () -> Void = {}
-    var startPreset: (Int) -> Void = { _ in }
     var startCustom: (Int) -> Void = { _ in }
     var openSettings: () -> Void = {}
     var setClockVisible: (Bool) -> Void = { _ in }
@@ -27,6 +26,7 @@ final class AppModel: ObservableObject {
     var copyStatsImage: () -> Void = {}
     var saveStatsImage: () -> Void = {}
     var requestAccessibility: () -> Void = {}
+    var confirmReset: () -> Void = {}
 
     init(snapshot: TimerSnapshot, settings: TimeFlipSettings, stats: FocusStats = .empty) {
         self.snapshot = snapshot

@@ -94,10 +94,11 @@ public final class TimerEngine {
         autoStartNext: Bool = false,
         now: @escaping () -> Date = Date.init
     ) {
-        self.durations = durations
+        let safe = durations.clamped()
+        self.durations = safe
         self.autoStartNext = autoStartNext
         self.now = now
-        let total = TimeInterval(durations.focusMinutes * 60)
+        let total = TimeInterval(safe.focusMinutes * 60)
         self.snapshot = TimerSnapshot(
             phase: .idle,
             isRunning: false,
@@ -127,6 +128,14 @@ public final class TimerEngine {
 
     public func startCustom(minutes: Int) {
         guard (1...180).contains(minutes) else { return }
+        // 正在跑的阶段先按「跳过」收掉：否则这一轮既不落会话、也不计中断，等于静默丢数据。
+        // 临时关掉自动接续，免得刚收掉就自动开下一阶段再被覆盖。
+        if snapshot.phase != .idle {
+            let auto = autoStartNext
+            autoStartNext = false
+            finish(reason: .skipped)
+            autoStartNext = auto
+        }
         customMinutes = minutes
         pendingNext = nil
         begin(.focus, overrideMinutes: minutes)
@@ -185,9 +194,9 @@ public final class TimerEngine {
     }
 
     public func updateDurations(_ newValue: Durations) {
-        durations = newValue
+        durations = newValue.clamped()
         guard snapshot.phase == .idle, !snapshot.isFinished else { return }
-        let total = TimeInterval(newValue.focusMinutes * 60)
+        let total = TimeInterval(durations.focusMinutes * 60)
         snapshot.remaining = total
         snapshot.total = total
         snapshot.progress = 0
@@ -239,7 +248,10 @@ public final class TimerEngine {
         let wasCustom = customMinutes != nil
         let planned = Int(snapshot.total.rounded())
         let spent: Int
-        if let startedAt {
+        if snapshot.isPaused {
+            // 暂停中跳过：`startedAt` 还停在暂停前，用 remaining 反推才不含暂停挂机的时间。
+            spent = min(planned, max(0, Int((snapshot.total - snapshot.remaining).rounded())))
+        } else if let startedAt {
             spent = min(planned, max(0, Int(now().timeIntervalSince(startedAt).rounded())))
         } else {
             spent = planned
@@ -248,6 +260,7 @@ public final class TimerEngine {
             completedFocusSessions += 1
         }
 
+        let perLongBreak = max(1, durations.sessionsPerLongBreak)
         let next: TimerPhase
         if finished == .focus {
             if wasCustom {
@@ -255,7 +268,7 @@ public final class TimerEngine {
             } else if reason == .skipped {
                 next = .shortBreak
             } else {
-                next = completedFocusSessions % durations.sessionsPerLongBreak == 0 ? .longBreak : .shortBreak
+                next = completedFocusSessions % perLongBreak == 0 ? .longBreak : .shortBreak
             }
         } else {
             next = .focus

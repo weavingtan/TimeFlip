@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Combine
 import SwiftUI
 
 struct SettingsView: View {
@@ -59,6 +60,10 @@ struct SettingsView: View {
         .frame(minWidth: 800, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { accessibilityTrusted = AXIsProcessTrusted() }
+        // 用户去系统设置里授权后切回来，状态要立刻更新，不能等下次打开窗口。
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            accessibilityTrusted = AXIsProcessTrusted()
+        }
     }
 
     private var pageArea: some View {
@@ -831,13 +836,11 @@ struct SettingsView: View {
 
             card("重置") {
                 Button("恢复默认设置") {
-                    model.settings = TimeFlipSettings()
-                    model.setClockVisible(true)
-                    model.commitSettings()
+                    model.confirmReset()
                 }
                 .buttonStyle(TFChipButtonStyle(tint: TFTheme.accent(for: .focus), prominent: true))
                 .frame(width: 140)
-                hint("会同时重置桌面时钟的位置与外观。")
+                hint("会同时重置桌面时钟的位置、外观与计时轮次，点击后还会再确认一次。")
             }
         }
     }

@@ -155,6 +155,20 @@ public struct ClockBehavior: Codable, Equatable, Sendable {
     public var visible: Bool = true
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case showMode, form, layer, visible
+    }
+
+    /// 逐字段回退：新增字段时老文件不会把整段行为设置打回默认值。
+    public init(from decoder: Decoder) throws {
+        let fallback = ClockBehavior()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        showMode = (try? container.decode(ShowMode.self, forKey: .showMode)) ?? fallback.showMode
+        form = (try? container.decode(WindowForm.self, forKey: .form)) ?? fallback.form
+        layer = (try? container.decode(WindowLayer.self, forKey: .layer)) ?? fallback.layer
+        visible = (try? container.decode(Bool.self, forKey: .visible)) ?? fallback.visible
+    }
 }
 
 public struct MenuBarSettings: Codable, Equatable, Sendable {
@@ -168,6 +182,18 @@ public struct MenuBarSettings: Codable, Equatable, Sendable {
     public var showProgressRing: Bool = true
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case style, showProgressRing
+    }
+
+    public init(from decoder: Decoder) throws {
+        let fallback = MenuBarSettings()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        style = (try? container.decode(Style.self, forKey: .style)) ?? fallback.style
+        showProgressRing = (try? container.decode(Bool.self, forKey: .showProgressRing))
+            ?? fallback.showProgressRing
+    }
 }
 
 public struct HotKeySpec: Codable, Equatable, Sendable {
@@ -191,6 +217,21 @@ public struct WindowOrigin: Codable, Equatable, Sendable {
         self.x = x
         self.y = y
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case x, y
+    }
+
+    /// 非法坐标（漏字段、NaN、Infinity）一律回 0：否则会原样传给 `setFrame`。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func coordinate(_ key: CodingKeys) -> Double {
+            let value = (try? container.decode(Double.self, forKey: key)) ?? 0
+            return value.isFinite ? value : 0
+        }
+        x = coordinate(.x)
+        y = coordinate(.y)
+    }
 }
 
 public struct TimerSettings: Codable, Equatable, Sendable {
@@ -200,6 +241,22 @@ public struct TimerSettings: Codable, Equatable, Sendable {
     public var hotKey: HotKeySpec = .default
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case durations, autoStartNext, soundName, hotKey
+    }
+
+    public init(from decoder: Decoder) throws {
+        let fallback = TimerSettings()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        durations = ((try? container.decode(Durations.self, forKey: .durations)) ?? fallback.durations).clamped()
+        autoStartNext = (try? container.decode(Bool.self, forKey: .autoStartNext)) ?? fallback.autoStartNext
+        // 显式 null 表示「无提示音」，只有整个键缺失才退回默认音；否则选了「无」会被默认值顶回来。
+        soundName = container.contains(.soundName)
+            ? ((try? container.decodeIfPresent(String.self, forKey: .soundName)) ?? nil)
+            : fallback.soundName
+        hotKey = (try? container.decode(HotKeySpec.self, forKey: .hotKey)) ?? fallback.hotKey
+    }
 }
 
 /// 统计相关的用户设置（目前只有每日目标）。

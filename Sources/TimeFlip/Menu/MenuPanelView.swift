@@ -170,7 +170,7 @@ struct MenuPanelView: View {
             ) {
                 ForEach([5, 10, 15, 25, 45, 60], id: \.self) { minutes in
                     Button("\(minutes) 分钟") {
-                        model.startPreset(minutes)
+                        model.startCustom(minutes)
                     }
                     .buttonStyle(TFChipButtonStyle())
                     .help("开始 \(minutes) 分钟倒计时")

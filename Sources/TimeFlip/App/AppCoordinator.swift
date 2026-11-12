@@ -20,6 +20,8 @@ final class AppCoordinator: NSObject {
     private var clockController: FloatingClockWindowController?
     private var settingsController: SettingsWindowController?
     private var hotKey: HotKey?
+    /// 当前真正注册成功的快捷键组合，用来避免每次改设置都重新注册。
+    private var activeHotKeySpec: HotKeySpec?
     private let chime = ChimePlayer()
     private let notifier = Notifier()
     private let sessionLog: SessionLog
@@ -98,7 +100,6 @@ final class AppCoordinator: NSObject {
         model.toggle = { [weak self] in self?.toggleTimer() }
         model.skip = { [weak self] in self?.engine.skip() }
         model.reset = { [weak self] in self?.engine.reset() }
-        model.startPreset = { [weak self] minutes in self?.engine.startCustom(minutes: minutes) }
         model.startCustom = { [weak self] minutes in self?.engine.startCustom(minutes: minutes) }
         model.openSettings = { [weak self] in self?.openSettings() }
         model.setClockVisible = { [weak self] visible in self?.setClockVisible(visible) }
@@ -114,6 +115,7 @@ final class AppCoordinator: NSObject {
         model.copyStatsImage = { [weak self] in self?.copyStatsImage() }
         model.saveStatsImage = { [weak self] in self?.saveStatsImage() }
         model.requestAccessibility = { ScreenLocker().requestAccessibility() }
+        model.confirmReset = { [weak self] in self?.resetAllSettings() }
     }
 
     private func registerHotKey() {
@@ -124,6 +126,7 @@ final class AppCoordinator: NSObject {
             }
         }
         self.hotKey = hotKey
+        activeHotKeySpec = spec
 
         if ProcessInfo.processInfo.environment["TIMEFLIP_DEBUG"] == "1" {
             NSLog("TimeFlip hotkey registered=%@ spec=%@", hotKey.isRegistered ? "true" : "false", String(describing: spec))
@@ -131,9 +134,21 @@ final class AppCoordinator: NSObject {
 
         if !hotKey.isRegistered, spec != .default {
             _ = hotKey.reload(spec: .default)
+            activeHotKeySpec = .default
             model.settings.timer.hotKey = .default
             showAlert("快捷键注册失败", "原组合可能已被其他应用占用，已回退到 ⌃⌥⌘T。")
         }
+    }
+
+    /// 只有组合真的变了才重新注册：设置面板每拖一次滑杆都会 commit，反复注销/注册热键没必要。
+    private func applyHotKey(_ spec: HotKeySpec) {
+        guard let hotKey, activeHotKeySpec != spec else { return }
+        activeHotKeySpec = spec
+        if hotKey.reload(spec: spec) { return }
+
+        activeHotKeySpec = .default
+        _ = hotKey.reload(spec: .default)
+        model.settings.timer.hotKey = .default
     }
 
     // MARK: - 事件
@@ -224,6 +239,8 @@ final class AppCoordinator: NSObject {
             self?.lockNow(style: style)
         } onSnooze: { [weak self] in
             // 再来 5 分钟：直接开一轮自定义倒计时，结束后不再锁屏（自定义不锁）。
+            // 先收掉休息遮罩，否则它会盖到下一个 tick 才消失。
+            self?.breakOverlay.hide()
             self?.engine.startCustom(minutes: 5)
         } onSkip: {
             // 用户明确放弃这次强制休息，不写进统计（这本来就不是一次专注）。
@@ -254,7 +271,6 @@ final class AppCoordinator: NSObject {
 
         let now = Date()
         let appearance = model.settings.appearance
-        updateStatusItem()
         let text = ClockRenderModel.displayText(
             snapshot: model.snapshot,
             settings: model.settings,
@@ -267,7 +283,8 @@ final class AppCoordinator: NSObject {
 
         let metrics: ClockMetrics
         if model.settings.behavior.form == .fullScreen {
-            let width = NSScreen.main?.frame.width ?? 1512
+            // 按挂件所在屏算，不是主屏：副屏铺满时字号才会正确反算。
+            let width = (clockController.currentScreen ?? NSScreen.main)?.frame.width ?? 1512
             metrics = ClockMetrics.fullScreen(
                 screenWidth: width,
                 appearance: appearance,
@@ -315,10 +332,7 @@ final class AppCoordinator: NSObject {
         engine.updateDurations(settings.timer.durations)
         model.clockVisible = settings.behavior.visible
 
-        if let hotKey, !hotKey.reload(spec: settings.timer.hotKey), settings.timer.hotKey != .default {
-            _ = hotKey.reload(spec: .default)
-            model.settings.timer.hotKey = .default
-        }
+        applyHotKey(settings.timer.hotKey)
 
         model.stats = computeStats()
         updateStatusItem()
@@ -376,6 +390,21 @@ final class AppCoordinator: NSObject {
         settingsController?.show()
     }
 
+    /// 恢复默认设置：先确认，再把引擎轮次、时钟位置一并复位（不只是换一份外观）。
+    private func resetAllSettings() {
+        guard confirm(
+            title: "恢复默认设置？",
+            message: "会重置所有外观、计时时长、统计目标与桌面时钟位置，专注记录不受影响。",
+            confirmTitle: "恢复默认"
+        ) else { return }
+
+        model.settings = TimeFlipSettings()
+        model.clockVisible = true
+        engine.reset()
+        clockController?.resetPosition()
+        applySettings()
+    }
+
     /// 「在访达中显示设置文件」：文件还没落盘时退回到目录本身。
     private func revealSettingsFile() {
         try? FileManager.default.createDirectory(
@@ -408,7 +437,11 @@ final class AppCoordinator: NSObject {
         engine.tick()
         wokeFromSleep = false
 
-        refreshClock()
+        // 计时中 tick 已经通过 onChange 刷过一遍挂件；只有空闲/暂停（tick 不产生快照）时才需要自己刷，
+        // 否则纯时钟显示会停住。
+        if !engine.snapshot.isRunning {
+            refreshClock()
+        }
         updateBreakOverlay()
     }
 
@@ -449,8 +482,11 @@ final class AppCoordinator: NSObject {
     }
 
     private func saveStatsImage() {
-        if ShareCardRenderer.savePNG(stats: model.stats) == nil {
+        switch ShareCardRenderer.savePNG(stats: model.stats) {
+        case .saved, .cancelled:
             // 用户取消保存不需要提示，只有真的写失败才说一声。
+            break
+        case .failed:
             showAlert("保存失败", "统计图没有保存成功，请检查目标文件夹权限。")
         }
     }
@@ -464,7 +500,10 @@ final class AppCoordinator: NSObject {
     }
 
     private func apply(document: ThemeDocument) {
-        model.settings.appearance = document.appearance
+        // 和套用预设保持一致：只换外观，字号留用户自己的。
+        var appearance = document.appearance
+        appearance.fontSize = model.settings.appearance.fontSize
+        model.settings.appearance = appearance.clamped()
         applySettings()
         showAlert("已应用主题：\(document.name)", "外观来自别人分享的配置，字号保持你原来的设置。")
     }
@@ -543,5 +582,17 @@ final class AppCoordinator: NSObject {
         alert.informativeText = message
         alert.addButton(withTitle: "好")
         alert.runModal()
+    }
+
+    /// 破坏性操作前的确认框：默认按钮是「取消」，别让人手滑一下就把设置清空。
+    private func confirm(title: String, message: String, confirmTitle: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: confirmTitle)
+        alert.alertStyle = .warning
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }

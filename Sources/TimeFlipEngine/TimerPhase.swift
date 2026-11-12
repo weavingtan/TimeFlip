@@ -30,6 +30,27 @@ public struct Durations: Codable, Equatable, Sendable {
 
     public static let standard = Durations()
 
+    private enum CodingKeys: String, CodingKey {
+        case focusMinutes, shortBreakMinutes, longBreakMinutes, sessionsPerLongBreak
+    }
+
+    /// 缺失字段逐个回退，越界数值直接夹回合法区间：
+    /// settings.json 是用户能手改的文件，一个 0 轮就会让状态机除零崩掉。
+    public init(from decoder: Decoder) throws {
+        let fallback = Durations.standard
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func value(_ key: CodingKeys, _ fallbackValue: Int) -> Int {
+            (try? container.decode(Int.self, forKey: key)) ?? fallbackValue
+        }
+        let parsed = Durations(
+            focusMinutes: value(.focusMinutes, fallback.focusMinutes),
+            shortBreakMinutes: value(.shortBreakMinutes, fallback.shortBreakMinutes),
+            longBreakMinutes: value(.longBreakMinutes, fallback.longBreakMinutes),
+            sessionsPerLongBreak: value(.sessionsPerLongBreak, fallback.sessionsPerLongBreak)
+        )
+        self = parsed.clamped()
+    }
+
     public func minutes(for phase: TimerPhase) -> Int {
         switch phase {
         case .focus, .idle: return focusMinutes
@@ -38,10 +59,13 @@ public struct Durations: Codable, Equatable, Sendable {
         }
     }
 
-    public var isValid: Bool {
-        (1...180).contains(focusMinutes)
-            && (1...180).contains(shortBreakMinutes)
-            && (1...180).contains(longBreakMinutes)
-            && (2...8).contains(sessionsPerLongBreak)
+    /// 夹回界面允许的区间（分钟 1…180、轮次 2…8）。
+    public func clamped() -> Durations {
+        Durations(
+            focusMinutes: min(180, max(1, focusMinutes)),
+            shortBreakMinutes: min(180, max(1, shortBreakMinutes)),
+            longBreakMinutes: min(180, max(1, longBreakMinutes)),
+            sessionsPerLongBreak: min(8, max(2, sessionsPerLongBreak))
+        )
     }
 }

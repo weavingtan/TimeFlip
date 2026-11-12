@@ -59,6 +59,16 @@ enum PreviewRenderer {
         clockOnly.appearance.showBottomLine = false
         write(model: render(settings: clockOnly, snapshot: snapshot), to: directory.appendingPathComponent("4-clock-only.png"))
 
+        // 12 小时制（"07:28:05 PM"）：核对空格不会被画成一张空白卡、AM/PM 不会顶出卡片。
+        var twelveHour = TimeFlipSettings()
+        twelveHour.behavior.showMode = .clockOnly
+        twelveHour.appearance.fontSize = 64
+        twelveHour.appearance.use24Hour = false
+        write(
+            model: render(settings: twelveHour, snapshot: snapshot),
+            to: directory.appendingPathComponent("4b-clock-12h.png")
+        )
+
         // 6. 按本机已保存的设置再画一张：核对真实配置下的观感（只读设置，不写回）。
         let store = SettingsStore(directory: AppPaths.supportDirectory)
         store.load()

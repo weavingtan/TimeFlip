@@ -18,10 +18,6 @@ extension RGBAColor {
     var luminance: Double {
         0.2126 * red + 0.7152 * green + 0.0722 * blue
     }
-
-    func nsColor(opacity: Double) -> NSColor {
-        NSColor(srgbRed: red, green: green, blue: blue, alpha: max(0, min(1, opacity)))
-    }
 }
 
 extension ClockFontWeight {

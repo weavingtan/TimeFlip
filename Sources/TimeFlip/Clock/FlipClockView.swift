@@ -108,6 +108,9 @@ struct FlipClockView: View {
             ForEach(Array(model.characters.enumerated()), id: \.offset) { _, character in
                 if character == ":" {
                     colon
+                } else if character == " " {
+                    // 12 小时制 "07:28 PM" 里那个空格：留出间距，但不能画成一张空白卡。
+                    Color.clear.frame(width: metrics.digitWidth, height: metrics.digitHeight)
                 } else {
                     FlipDigitView(
                         text: String(character),

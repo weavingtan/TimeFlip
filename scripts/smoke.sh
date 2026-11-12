@@ -9,13 +9,15 @@ BIN="$APP/Contents/MacOS/TimeFlip"
 OUT="/tmp/timeflip-smoke"
 LEVEL=$(( -2147483603 + 1 ))   # kCGDesktopIconWindowLevel + 1
 SETTINGS="$HOME/Library/Application Support/TimeFlip/settings.json"
+HAD_SETTINGS=0
+[ -f "$SETTINGS" ] && HAD_SETTINGS=1
 
 cleanup() {
   osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
   pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
-  python3 - "$SETTINGS" <<'PY'
-import json, os, sys
-target = sys.argv[1]
+  python3 - "$SETTINGS" "$HAD_SETTINGS" <<'PY'
+import os, sys
+target, had_settings = sys.argv[1], sys.argv[2] == "1"
 backup = "/tmp/timeflip-smoke-backup.json"
 if os.path.exists(backup):
     with open(backup) as f:
@@ -23,6 +25,9 @@ if os.path.exists(backup):
     with open(target, "w") as f:
         f.write(data)
     os.remove(backup)
+elif not had_settings and os.path.exists(target):
+    # 冒烟前本来就没有设置文件：把测试写的最小配置删掉，别给用户留一份被裁剪过的设置。
+    os.remove(target)
 PY
 }
 trap cleanup EXIT
@@ -37,6 +42,7 @@ echo "== 3/5 离屏渲染（无需屏幕录制权限）"
 "$BIN" --render-preview "$OUT/preview" | tail -4
 "$BIN" --render-settings "$OUT/settings" | tail -4
 test -f "$OUT/preview/1-flip-light.png"
+test -f "$OUT/preview/4b-clock-12h.png"
 test -f "$OUT/preview/6-themes.png"
 test -f "$OUT/preview/7-share-card.png"
 test -f "$OUT/settings/menu-panel.png"

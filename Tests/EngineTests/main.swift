@@ -267,6 +267,59 @@ func testUpdateDurations() {
     expectEqual(engine.snapshot.total, 3000, "运行中改时长不影响当前阶段")
 }
 
+// MARK: - Task 8：非法设置不得把引擎带崩
+
+func testEngineClampsIllegalDurations() {
+    let clock = TestClock()
+    let engine = makeEngine(
+        Durations(focusMinutes: 0, shortBreakMinutes: 5, longBreakMinutes: 20, sessionsPerLongBreak: 0),
+        clock: clock
+    )
+    expectEqual(engine.snapshot.total, 60, "0 分钟被夹到 1 分钟")
+
+    engine.start()
+    clock.advance(60)
+    engine.tick()
+    expectEqual(engine.snapshot.nextPhase, .shortBreak, "轮次 0 被夹到 2，首轮后仍是短休")
+    expectEqual(engine.snapshot.completedFocusSessions, 1, "首轮正常计入")
+}
+
+// MARK: - Task 9：会话口径
+
+func testSkipWhilePausedCountsSittingTimeOnly() {
+    let clock = TestClock()
+    let engine = makeEngine(clock: clock)
+    var transition: PhaseTransition?
+    engine.onPhaseTransition = { transition = $0 }
+
+    engine.start()
+    clock.advance(60)
+    engine.pause()
+    clock.advance(600)      // 暂停后挂机 10 分钟
+    engine.skip()
+
+    expectEqual(transition?.spentSeconds, 60, "暂停时间不算坐着的时长")
+    expectEqual(transition?.reason, .skipped, "记为跳过")
+}
+
+func testStartCustomClosesRunningPhase() {
+    let clock = TestClock()
+    let engine = makeEngine(clock: clock)
+    var transitions: [PhaseTransition] = []
+    engine.onPhaseTransition = { transitions.append($0) }
+
+    engine.start()
+    clock.advance(300)
+    engine.startCustom(minutes: 5)
+
+    expectEqual(transitions.count, 1, "换自定义前先把当前阶段收掉")
+    expectEqual(transitions.first?.reason, .skipped, "记为中断，不静默丢弃")
+    expectEqual(transitions.first?.spentSeconds, 300, "带实际坐了 5 分钟")
+    expectEqual(engine.snapshot.isCustom, true, "进入自定义倒计时")
+    expectEqual(engine.snapshot.total, 300, "自定义 5 分钟")
+    expectEqual(engine.snapshot.phase, .focus, "自定义从专注开始")
+}
+
 // MARK: - Task 3
 
 func makeTempDir() -> URL {
@@ -327,6 +380,55 @@ func testMissingSectionsFallback() {
     expectEqual(store.settings.lock.style, .off, "新增锁屏段缺失时默认关闭")
     expectEqual(store.settings.behavior.form, .floating, "缺失 section 用默认值")
     expectEqual(store.settings.menuBar.style, .iconAndTime, "缺失 section 用默认值")
+}
+
+func testDurationsClampedOnDecode() {
+    let json = #"{"focusMinutes":0,"shortBreakMinutes":999,"longBreakMinutes":-5,"sessionsPerLongBreak":0}"#
+    let decoded = try? JSONDecoder().decode(Durations.self, from: Data(json.utf8))
+    expectEqual(decoded?.focusMinutes, 1, "专注时长下限夹到 1")
+    expectEqual(decoded?.shortBreakMinutes, 180, "短休上限夹到 180")
+    expectEqual(decoded?.longBreakMinutes, 1, "长休下限夹到 1")
+    expectEqual(decoded?.sessionsPerLongBreak, 2, "轮次下限夹到 2")
+}
+
+func testPartialSectionKeepsSiblings() {
+    let dir = makeTempDir()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let json = #"""
+    {"version":1,
+     "timer":{"autoStartNext":true,"soundName":"Ping","durations":{"focusMinutes":50}},
+     "menuBar":{"style":"timeOnly"},
+     "behavior":{"form":"fullScreen"},
+     "windowPlacements":{"SCREEN-A":{"x":12}}}
+    """#
+    try? Data(json.utf8).write(to: dir.appendingPathComponent("settings.json"))
+
+    let store = SettingsStore(directory: dir)
+    store.load()
+
+    expectEqual(store.settings.timer.durations.focusMinutes, 50, "已有字段保留")
+    expectEqual(store.settings.timer.durations.shortBreakMinutes, 5, "段内缺失字段用默认值")
+    expectEqual(store.settings.timer.durations.sessionsPerLongBreak, 4, "段内缺失字段用默认值")
+    expectEqual(store.settings.timer.autoStartNext, true, "同段兄弟字段不被拖累")
+    expectEqual(store.settings.timer.soundName, "Ping", "提示音保留")
+    expectEqual(store.settings.timer.hotKey, .default, "缺失的快捷键用默认值")
+    expectEqual(store.settings.menuBar.style, .timeOnly, "菜单栏样式保留")
+    expectEqual(store.settings.menuBar.showProgressRing, true, "缺失字段用默认值")
+    expectEqual(store.settings.behavior.form, .fullScreen, "形态保留")
+    expectEqual(store.settings.behavior.layer, .desktop, "缺失字段用默认值")
+    expectEqual(store.settings.windowPlacements["SCREEN-A"]?.x, 12, "半个窗口位置也能解出来")
+    expectEqual(store.settings.windowPlacements["SCREEN-A"]?.y, 0, "缺失坐标回 0")
+}
+
+func testNilSoundNameSurvivesReload() {
+    let dir = makeTempDir()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let json = #"{"timer":{"soundName":null}}"#
+    try? Data(json.utf8).write(to: dir.appendingPathComponent("settings.json"))
+
+    let store = SettingsStore(directory: dir)
+    store.load()
+    expectEqual(store.settings.timer.soundName, nil, "选了「无」要能读回 nil，不能被默认值顶掉")
 }
 
 func testCorruptSettingsFallback() {
@@ -620,6 +722,29 @@ func testStatsFormatting() {
     expectEqual(StatsFormatting.compactDuration(seconds: 42 * 60), "42m", "紧凑分钟")
 }
 
+func testFocusStatsCustomExcludedFromCycles() {
+    let calendar = utcCalendar()
+    let now = utcDate(2026, 11, 12, 15, 0, 0)
+    let custom = SessionRecord(
+        startedAt: utcDate(2026, 11, 12, 10, 0, 0),
+        endedAt: utcDate(2026, 11, 12, 10, 5, 0),
+        plannedSeconds: 300,
+        actualSeconds: 300,
+        completed: true,
+        isCustom: true
+    )
+    let records = [statsRecord(calendar: calendar, daysAgo: 0, hour: 9), custom]
+
+    let stats = FocusStats.make(records: records, goal: 4, now: now, calendar: calendar)
+    expectEqual(stats.todaySessions, 1, "自定义倒计时不计入轮次")
+    expectEqual(stats.todayFocusSeconds, 1800, "自定义时长仍算专注时长")
+    expectEqual(stats.completedCount, 1, "累计完成只数番茄轮")
+    expectEqual(stats.streakDays, 1, "自定义不刷连续天数")
+    expectEqual(stats.last14Days.last?.sessions, 1, "柱状图轮次不含自定义")
+    expectEqual(stats.last14Days.last?.focusSeconds, 1800, "柱状图时长含自定义")
+    expectEqual(stats.goalProgress, 0.25, "目标进度只算轮次")
+}
+
 // MARK: - Task 7：锁屏策略
 
 func testLockPolicyFocus() {
@@ -751,10 +876,16 @@ let tests: [(String, () -> Void)] = [
     ("自定义倒计时", testCustomCountdown),
     ("非法自定义被忽略", testInvalidCustomIgnored),
     ("更新时长", testUpdateDurations),
+    ("非法时长被夹取", testEngineClampsIllegalDurations),
+    ("暂停后跳过只算坐着时长", testSkipWhilePausedCountsSittingTimeOnly),
+    ("换自定义先收掉当前阶段", testStartCustomClosesRunningPhase),
     ("默认设置", testDefaultSettings),
     ("颜色 hex 解析", testColorHex),
     ("设置往返", testSettingsRoundTrip),
     ("缺失段兜底", testMissingSectionsFallback),
+    ("时长越界夹取", testDurationsClampedOnDecode),
+    ("段内字段缺失兜底", testPartialSectionKeepsSiblings),
+    ("无提示音往返", testNilSoundNameSurvivesReload),
     ("损坏文件兜底", testCorruptSettingsFallback),
     ("倒计时文案", testCountdownFormats),
     ("时钟文案", testClockFormats),
@@ -772,6 +903,7 @@ let tests: [(String, () -> Void)] = [
     ("连续天数", testFocusStatsStreakFromYesterday),
     ("空账本", testFocusStatsEmpty),
     ("统计文案", testStatsFormatting),
+    ("自定义不计入轮次", testFocusStatsCustomExcludedFromCycles),
     ("锁屏：专注完成", testLockPolicyFocus),
     ("锁屏：关闭", testLockPolicyOff),
     ("锁屏：休息不锁", testLockPolicyBreakNeverLocks),
