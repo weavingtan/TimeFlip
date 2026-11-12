@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     var quit: () -> Void = {}
     var previewChime: (String?) -> Void = { _ in }
     var commitSettings: () -> Void = {}
+    var revealSettings: () -> Void = {}
 
     init(snapshot: TimerSnapshot, settings: TimeFlipSettings) {
         self.snapshot = snapshot

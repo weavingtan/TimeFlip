@@ -24,6 +24,14 @@ final class AppCoordinator: NSObject {
     private var tickTimer: Timer?
     private var saveWorkItem: DispatchWorkItem?
 
+    /// 每秒都会刷新，用上一次的输入做去重：菜单栏图标与挂件只在真正变化时重绘。
+    private var lastStatusSnapshot: TimerSnapshot?
+    private var lastMenuBar: MenuBarSettings?
+    private var lastRender: ClockRenderModel?
+    private var lastBehavior: ClockBehavior?
+    private var lastPlacements: [String: WindowOrigin] = [:]
+    private var hasRenderedClock = false
+
     override init() {
         let store = SettingsStore(directory: AppPaths.supportDirectory)
         store.load()
@@ -83,6 +91,7 @@ final class AppCoordinator: NSObject {
         model.quit = { NSApp.terminate(nil) }
         model.previewChime = { [weak self] name in self?.chime.play(name: name) }
         model.commitSettings = { [weak self] in self?.applySettings() }
+        model.revealSettings = { [weak self] in self?.revealSettingsFile() }
     }
 
     private func registerHotKey() {
@@ -150,11 +159,13 @@ final class AppCoordinator: NSObject {
     // MARK: - 时钟
 
     private func refreshClock() {
-        updateStatusItem()
         guard let clockController else { return }
 
         let now = Date()
         let appearance = model.settings.appearance
+        let behavior = model.settings.behavior
+        let placements = model.settings.windowPlacements
+
         let text = ClockRenderModel.displayText(
             snapshot: model.snapshot,
             settings: model.settings,
@@ -166,8 +177,11 @@ final class AppCoordinator: NSObject {
         let colons = characters.count - slots
 
         let metrics: ClockMetrics
-        if model.settings.behavior.form == .fullScreen {
-            let width = NSScreen.main?.frame.width ?? 1512
+        if behavior.form == .fullScreen {
+            // 铺满要按挂件实际所在屏幕算，副屏与主屏尺寸不同时字号才能贴合。
+            let width = clockController.currentScreen?.frame.width
+                ?? NSScreen.main?.frame.width
+                ?? 1512
             metrics = ClockMetrics.fullScreen(
                 screenWidth: width,
                 appearance: appearance,
@@ -184,15 +198,28 @@ final class AppCoordinator: NSObject {
             metrics: metrics,
             now: now
         )
-        clockController.update(
-            render: render,
-            behavior: model.settings.behavior,
-            placements: model.settings.windowPlacements
-        )
+
+        guard !hasRenderedClock
+            || render != lastRender
+            || behavior != lastBehavior
+            || placements != lastPlacements
+        else { return }
+
+        hasRenderedClock = true
+        lastRender = render
+        lastBehavior = behavior
+        lastPlacements = placements
+        clockController.update(render: render, behavior: behavior, placements: placements)
     }
 
     private func updateStatusItem() {
-        statusItemController?.update(snapshot: model.snapshot, settings: model.settings)
+        guard let statusItemController else { return }
+        guard lastStatusSnapshot != model.snapshot || lastMenuBar != model.settings.menuBar else {
+            return
+        }
+        lastStatusSnapshot = model.snapshot
+        lastMenuBar = model.settings.menuBar
+        statusItemController.update(snapshot: model.snapshot, settings: model.settings)
     }
 
     private func setClockVisible(_ visible: Bool) {
@@ -220,6 +247,7 @@ final class AppCoordinator: NSObject {
             model.settings.timer.hotKey = .default
         }
 
+        updateStatusItem()
         refreshClock()
         scheduleSave()
     }
@@ -255,6 +283,18 @@ final class AppCoordinator: NSObject {
             settingsController = SettingsWindowController(model: model)
         }
         settingsController?.show()
+    }
+
+    private func revealSettingsFile() {
+        try? FileManager.default.createDirectory(
+            at: AppPaths.supportDirectory,
+            withIntermediateDirectories: true
+        )
+        if FileManager.default.fileExists(atPath: store.fileURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([store.fileURL])
+        } else {
+            NSWorkspace.shared.open(AppPaths.supportDirectory)
+        }
     }
 
     // MARK: - 定时器

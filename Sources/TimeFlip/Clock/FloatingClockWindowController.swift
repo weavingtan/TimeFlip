@@ -56,6 +56,9 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
 
     var onMove: ((String, WindowOrigin) -> Void)?
 
+    /// 挂件所在屏幕（用于铺满模式下按该屏宽度反算字号）。
+    var currentScreen: NSScreen? { targetScreen }
+
     override init() {
         window = ClockWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 260),
@@ -158,7 +161,10 @@ final class FloatingClockWindowController: NSObject, NSWindowDelegate {
 
         didInitialLayout = true
         applyLayer(behavior)
-        window.orderFrontRegardless()
+        // 每秒都会走到这里，已在屏上就别再反复 orderFront（无谓的窗口服务器调用）。
+        if !window.isVisible {
+            window.orderFrontRegardless()
+        }
 
         if ProcessInfo.processInfo.environment["TIMEFLIP_DEBUG"] == "1" {
             NSLog(
