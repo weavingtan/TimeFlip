@@ -5,6 +5,7 @@ final class AppModel: ObservableObject {
     @Published var snapshot: TimerSnapshot
     @Published var settings: TimeFlipSettings
     @Published var clockVisible: Bool
+    @Published var stats: FocusStats
 
     var toggle: () -> Void = {}
     var skip: () -> Void = {}
@@ -18,9 +19,19 @@ final class AppModel: ObservableObject {
     var commitSettings: () -> Void = {}
     var revealSettings: () -> Void = {}
 
-    init(snapshot: TimerSnapshot, settings: TimeFlipSettings) {
+    var applyTheme: (String) -> Void = { _ in }
+    var copyTheme: () -> Void = {}
+    var importThemeFromClipboard: () -> Void = {}
+    var exportThemeFile: () -> Void = {}
+    var importThemeFile: () -> Void = {}
+    var copyStatsImage: () -> Void = {}
+    var saveStatsImage: () -> Void = {}
+    var requestAccessibility: () -> Void = {}
+
+    init(snapshot: TimerSnapshot, settings: TimeFlipSettings, stats: FocusStats = .empty) {
         self.snapshot = snapshot
         self.settings = settings
+        self.stats = stats
         self.clockVisible = settings.behavior.visible
     }
 }

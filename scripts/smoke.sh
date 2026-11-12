@@ -37,7 +37,11 @@ echo "== 3/5 离屏渲染（无需屏幕录制权限）"
 "$BIN" --render-preview "$OUT/preview" | tail -4
 "$BIN" --render-settings "$OUT/settings" | tail -4
 test -f "$OUT/preview/1-flip-light.png"
+test -f "$OUT/preview/6-themes.png"
+test -f "$OUT/preview/7-share-card.png"
 test -f "$OUT/settings/menu-panel.png"
+test -f "$OUT/settings/settings-统计.png"
+test -f "$OUT/settings/settings-桌面时钟.png"
 
 echo "== 4/5 窗口断言"
 xcrun --sdk macosx swiftc -O scripts/window-check.swift -o .build/window-check
@@ -108,6 +112,17 @@ echo "$DRAG"
 case "$DRAG" in
   *"stayed=true resized=true saved=true"*) ;;
   *) echo "FAIL: 拖动后窗口被弹回记忆位置 / 位置没记住"; exit 1 ;;
+esac
+
+echo "-- 强制休息决策链（不真的锁屏，只打印策略与系统前提）"
+osascript -e 'quit app "TimeFlip"' >/dev/null 2>&1 || true
+pkill -f "$APP/Contents/MacOS/TimeFlip" >/dev/null 2>&1 || true
+sleep 1
+REST=$(env TIMEFLIP_DEBUG=1 "$BIN" --selftest-rest 2>&1 | grep RESTTEST || true)
+echo "$REST"
+case "$REST" in
+  *"lock=displaySleep delay=7 overlay=true"*) ;;
+  *) echo "FAIL: 锁屏策略没有按设置生效"; exit 1 ;;
 esac
 
 echo "== 5/5 还原设置并退出"

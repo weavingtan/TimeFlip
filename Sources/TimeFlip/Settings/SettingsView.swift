@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 
 struct SettingsView: View {
@@ -7,10 +8,12 @@ struct SettingsView: View {
     @State private var page: Page
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var loginItemError: String?
+    @State private var accessibilityTrusted = AXIsProcessTrusted()
 
     enum Page: String, CaseIterable, Identifiable {
         case timer = "计时器"
         case clock = "桌面时钟"
+        case stats = "统计"
         case general = "通用"
 
         var id: String { rawValue }
@@ -19,22 +22,16 @@ struct SettingsView: View {
             switch self {
             case .timer: return "timer"
             case .clock: return "clock"
+            case .stats: return "chart.bar.fill"
             case .general: return "gearshape"
-            }
-        }
-
-        var title: String {
-            switch self {
-            case .timer: return "计时器"
-            case .clock: return "桌面时钟"
-            case .general: return "通用"
             }
         }
 
         var caption: String {
             switch self {
-            case .timer: return "番茄流程、时长与提醒"
-            case .clock: return "挂在桌面上的翻转时钟"
+            case .timer: return "番茄流程、时长与结束后的强制休息"
+            case .clock: return "主题、外观与挂在桌面上的翻转时钟"
+            case .stats: return "每日目标、连续天数与分享卡片"
             case .general: return "启动项、菜单栏与数据"
             }
         }
@@ -59,14 +56,15 @@ struct SettingsView: View {
             Divider().opacity(0.6)
             pageArea
         }
-        .frame(minWidth: 780, minHeight: 560)
+        .frame(minWidth: 800, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear { accessibilityTrusted = AXIsProcessTrusted() }
     }
 
     private var pageArea: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(page.title)
+                Text(page.rawValue)
                     .font(.system(size: 19, weight: .semibold))
                 Text(page.caption)
                     .font(.system(size: 12))
@@ -94,6 +92,7 @@ struct SettingsView: View {
             switch page {
             case .timer: timerPage
             case .clock: clockPage
+            case .stats: statsPage
             case .general: generalPage
             }
         }
@@ -156,7 +155,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            Text("v1.0")
+            Text(versionText)
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, 8)
@@ -164,6 +163,11 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 200)
         .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private var versionText: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2.0"
+        return "v\(version)"
     }
 
     // MARK: - 计时器
@@ -211,6 +215,8 @@ struct SettingsView: View {
                 hint("通知被系统拦下时，会改为菜单栏图标变红 + 提示音。")
             }
 
+            lockCard
+
             card("快捷键") {
                 HStack(spacing: 6) {
                     ForEach(["⌃", "⌥", "⌘", "T"], id: \.self) { key in
@@ -235,6 +241,65 @@ struct SettingsView: View {
         }
     }
 
+    private var lockCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("结束专注后")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+
+            Toggle("铺全屏休息提示", isOn: model.binding(\.lock.overlayEnabled))
+                .toggleStyle(.checkbox)
+            hint("专注到点时盖住所有屏幕，显示休息倒计时和呼吸引导，休息结束自动消失。")
+
+            row("锁屏") {
+                Picker("", selection: model.binding(\.lock.style)) {
+                    Text("关闭").tag(LockStyle.off)
+                    Text("关闭屏幕").tag(LockStyle.displaySleep)
+                    Text("锁定屏幕").tag(LockStyle.lock)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 240)
+            }
+
+            HStack(spacing: 10) {
+                Text("宽限")
+                    .font(.system(size: 12))
+                    .frame(width: 76, alignment: .leading)
+                Stepper(value: model.binding(\.lock.graceSeconds), in: 0...60) {
+                    Text(settings.lock.graceSeconds == 0 ? "立刻锁屏" : "\(settings.lock.graceSeconds) 秒后可取消")
+                        .font(.system(size: 12))
+                        .monospacedDigit()
+                }
+                .disabled(!settings.lock.isEnabled)
+            }
+
+            Toggle("前台是全屏应用时不打扰（演示 / 录屏 / 视频）", isOn: model.binding(\.lock.skipWhenFullScreenApp))
+                .toggleStyle(.checkbox)
+
+            hint("「关闭屏幕」不需要任何权限；「锁定屏幕」会发系统快捷键 ⌃⌘Q，首次需要在「系统设置 → 隐私与安全性 → 辅助功能」里授权。自定义倒计时与睡眠唤醒后都不会锁屏。")
+
+            if settings.lock.style == .lock, !accessibilityTrusted {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                    Text("还没拿到辅助功能授权，现在会退化为「关闭屏幕」。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Button("去授权") {
+                        model.requestAccessibility()
+                        accessibilityTrusted = AXIsProcessTrusted()
+                    }
+                    .buttonStyle(TFChipButtonStyle(prominent: true))
+                    .frame(width: 80)
+                }
+            }
+        }
+        .tfCard()
+    }
+
     private var cycleHint: some View {
         HStack(spacing: 6) {
             ForEach(0..<max(2, durations.sessionsPerLongBreak), id: \.self) { index in
@@ -255,6 +320,8 @@ struct SettingsView: View {
     private var clockPage: some View {
         VStack(spacing: 16) {
             previewCard
+
+            themeCard
 
             card("显示") {
                 row("内容") {
@@ -311,6 +378,20 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(width: 240)
+
+                    Text("材质")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
+                    Picker("", selection: model.binding(\.appearance.material)) {
+                        Text("纸面").tag(ClockMaterial.paper)
+                        Text("玻璃").tag(ClockMaterial.glass)
+                        Text("金属").tag(ClockMaterial.metal)
+                        Text("木质").tag(ClockMaterial.wood)
+                        Text("像素").tag(ClockMaterial.pixel)
+                    }
+                    .labelsHidden()
+                    .frame(width: 100)
                 }
 
                 row("字体") {
@@ -365,6 +446,9 @@ struct SettingsView: View {
                     Text(String(format: "%.0f%%", settings.appearance.backgroundOpacity * 100))
                         .tfValueBadge()
                 }
+
+                Toggle("显示机身托盘", isOn: model.binding(\.appearance.showChassis))
+                    .toggleStyle(.checkbox)
             }
 
             card("显示项") {
@@ -389,14 +473,129 @@ struct SettingsView: View {
         }
     }
 
+    private var themeCard: some View {
+        card("主题") {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                spacing: 10
+            ) {
+                ForEach(ThemePreset.all) { preset in
+                    themeChip(preset)
+                }
+            }
+            .padding(.top, 2)
+
+            HStack(spacing: 8) {
+                Button("复制我的主题") { model.copyTheme() }
+                    .buttonStyle(TFChipButtonStyle())
+                    .frame(width: 118)
+                Button("从剪贴板导入") { model.importThemeFromClipboard() }
+                    .buttonStyle(TFChipButtonStyle())
+                    .frame(width: 130)
+                Button("存为文件…") { model.exportThemeFile() }
+                    .buttonStyle(TFChipButtonStyle())
+                    .frame(width: 100)
+                Button("从文件导入…") { model.importThemeFile() }
+                    .buttonStyle(TFChipButtonStyle())
+                    .frame(width: 110)
+                Spacer(minLength: 0)
+            }
+
+            hint("主题是一串 JSON，发给朋友让他点「从剪贴板导入」即可，不需要账号也不会联网。套用预设只换外观，字号保持你现在的设置。")
+        }
+    }
+
+    private func themeChip(_ preset: ThemePreset) -> some View {
+        let selected = settings.appearance.themeID == preset.id
+
+        return Button {
+            model.applyTheme(preset.id)
+        } label: {
+            themeChipLabel(preset, selected: selected)
+        }
+        .buttonStyle(.plain)
+        .help("套用「\(preset.name)」")
+    }
+
+    private func themeChipLabel(_ preset: ThemePreset, selected: Bool) -> some View {
+        let background: Color = selected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04)
+        let border: Color = selected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08)
+
+        return VStack(alignment: .leading, spacing: 7) {
+            themeSwatch(preset.appearance)
+            Text(preset.name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary)
+            Text(preset.subtitle)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: TFTheme.controlRadius, style: .continuous)
+                .fill(background)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: TFTheme.controlRadius, style: .continuous)
+                .strokeBorder(border, lineWidth: selected ? 1.4 : 1)
+        )
+    }
+
+    private func themeSwatch(_ appearance: ClockAppearance) -> some View {
+        // 用文字色判断深浅：磨砂玻璃是浅色卡配白字，底色必须按深色主题托一下才看得见。
+        let isDark = appearance.textColor.luminance > 0.55
+        // 玻璃材质真实不透明度很低，色板上抬到 0.55 才看得出卡面在哪。
+        let minOpacity = appearance.material == .glass ? 0.55 : 0.35
+        let cardFill = appearance.backgroundColor.color(
+            opacity: max(minOpacity, appearance.backgroundOpacity)
+        )
+        let trayFill: Color = isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.06)
+        let edge: Color = isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.08)
+
+        return HStack(spacing: 4) {
+            ForEach(0..<2, id: \.self) { _ in
+                themeSwatchCard(fill: cardFill, textColor: appearance.textColor.color, edge: edge, font: appearance)
+            }
+        }
+        .padding(5)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(trayFill)
+        )
+    }
+
+    private func themeSwatchCard(
+        fill: Color,
+        textColor: Color,
+        edge: Color,
+        font appearance: ClockAppearance
+    ) -> some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(fill)
+            .frame(height: 26)
+            .frame(maxWidth: .infinity)
+            .overlay(
+                Text("8")
+                    .font(.custom(appearance.fontFamily, size: 15).weight(appearance.fontWeight.swiftUI))
+                    .foregroundStyle(textColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(edge, lineWidth: 0.5)
+            )
+    }
+
     private var previewCard: some View {
         var previewSettings = model.settings
-        previewSettings.appearance.fontSize = 30
+        previewSettings.appearance.fontSize = 40
         let metrics = ClockMetrics.floating(appearance: previewSettings.appearance)
         let render = ClockRenderModel.make(snapshot: model.snapshot, settings: previewSettings, metrics: metrics)
 
         return FlipClockView(model: render)
-            .frame(maxWidth: .infinity, minHeight: 158)
+            .frame(maxWidth: .infinity, minHeight: 172)
             .background(
                 ZStack {
                     LinearGradient(
@@ -428,6 +627,156 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: TFTheme.cardRadius, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
             )
+    }
+
+    // MARK: - 统计
+
+    private var statsPage: some View {
+        let stats = model.stats
+
+        return VStack(spacing: 16) {
+            card("概览") {
+                HStack(spacing: 0) {
+                    statBlock(
+                        value: StatsFormatting.duration(seconds: stats.todayFocusSeconds),
+                        label: "今日专注",
+                        tint: TFTheme.accent(for: .focus)
+                    )
+                    divider
+                    statBlock(
+                        value: StatsFormatting.duration(seconds: stats.weekFocusSeconds),
+                        label: "本周专注",
+                        tint: TFTheme.accent(for: .longBreak)
+                    )
+                    divider
+                    statBlock(
+                        value: "\(stats.streakDays) 天",
+                        label: "连续专注",
+                        tint: TFTheme.accent(for: .shortBreak)
+                    )
+                    divider
+                    statBlock(
+                        value: "\(stats.completedCount)",
+                        label: "累计完成",
+                        tint: .secondary
+                    )
+                }
+            }
+
+            card("每日目标") {
+                row("目标") {
+                    Stepper(value: model.binding(\.stats.dailyGoalSessions), in: 0...24) {
+                        Text(
+                            settings.stats.dailyGoalSessions == 0
+                                ? "不设目标"
+                                : "每天 \(settings.stats.dailyGoalSessions) 轮"
+                        )
+                        .font(.system(size: 12))
+                        .monospacedDigit()
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Text("今日进度")
+                        .font(.system(size: 12))
+                        .frame(width: 76, alignment: .leading)
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.10))
+                            .frame(height: 6)
+                        GeometryReader { proxy in
+                            Capsule()
+                                .fill(stats.goalReached ? TFTheme.accent(for: .shortBreak) : TFTheme.accent(for: .focus))
+                                .frame(width: max(6, proxy.size.width * stats.goalProgress), height: 6)
+                        }
+                        .frame(height: 6)
+                    }
+                    .frame(width: 260)
+                    Text("\(stats.todaySessions)/\(max(1, stats.dailyGoalSessions))")
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .trailing)
+                }
+                hint("只统计走完的专注；跳过或提前放弃的会算进中断率，不算完成。")
+            }
+
+            card("最近 14 天") {
+                statsBars(days: stats.last14Days)
+                HStack(spacing: 18) {
+                    Text("最佳时段 \(stats.bestHour.map { String(format: "%02d:00", $0) } ?? "—")")
+                    Text("中断率 \(Int((stats.interruptionRate * 100).rounded()))%")
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
+
+            card("分享") {
+                HStack(spacing: 8) {
+                    Button("复制统计图") { model.copyStatsImage() }
+                        .buttonStyle(TFChipButtonStyle(prominent: true))
+                        .frame(width: 110)
+                    Button("保存到桌面…") { model.saveStatsImage() }
+                        .buttonStyle(TFChipButtonStyle())
+                        .frame(width: 118)
+                    Spacer(minLength: 0)
+                }
+                hint("生成一张 1080×1350 的竖图：本周专注时长、连续天数、14 天曲线，直接发朋友圈或群聊。")
+            }
+
+            card("数据") {
+                hint("会话记录保存在 ~/Library/Application Support/TimeFlip/sessions.json（本地，不上传，保留一年）。")
+                Button("在访达中显示设置文件") {
+                    model.revealSettings()
+                }
+                .buttonStyle(TFChipButtonStyle())
+                .frame(width: 190)
+            }
+        }
+    }
+
+    private func statBlock(value: String, label: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .foregroundStyle(tint == .secondary ? Color.primary : tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(width: 1, height: 34)
+            .padding(.horizontal, 12)
+    }
+
+    private func statsBars(days: [DayBucket]) -> some View {
+        let maxSeconds = max(1, days.map(\.focusSeconds).max() ?? 1)
+
+        return HStack(alignment: .bottom, spacing: 6) {
+            ForEach(days) { bucket in
+                VStack(spacing: 4) {
+                    Spacer(minLength: 0)
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .fill(
+                            bucket.sessions > 0
+                                ? TFTheme.accent(for: .focus).opacity(0.85)
+                                : Color.primary.opacity(0.10)
+                        )
+                        .frame(height: max(4, CGFloat(Double(bucket.focusSeconds) / Double(maxSeconds)) * 76))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(height: 84)
+        .accessibilityLabel("最近 14 天专注柱状图")
     }
 
     // MARK: - 通用

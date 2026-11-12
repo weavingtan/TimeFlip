@@ -9,11 +9,27 @@ public struct PhaseTransition: Equatable, Sendable {
     public let from: TimerPhase
     public let to: TimerPhase?
     public let reason: Reason
+    /// 这一阶段原本多长（秒），用于落库统计。
+    public let plannedSeconds: Int
+    /// 实际坐了多久（秒）：跳过时小于 plannedSeconds，睡眠补时后封顶到 plannedSeconds。
+    public let spentSeconds: Int
+    /// 是否是自定义倒计时（自定义不锁屏、不计入轮次）。
+    public let isCustom: Bool
 
-    public init(from: TimerPhase, to: TimerPhase?, reason: Reason) {
+    public init(
+        from: TimerPhase,
+        to: TimerPhase?,
+        reason: Reason,
+        plannedSeconds: Int = 0,
+        spentSeconds: Int = 0,
+        isCustom: Bool = false
+    ) {
         self.from = from
         self.to = to
         self.reason = reason
+        self.plannedSeconds = plannedSeconds
+        self.spentSeconds = spentSeconds
+        self.isCustom = isCustom
     }
 }
 
@@ -66,6 +82,8 @@ public final class TimerEngine {
     private let now: () -> Date
     private var durations: Durations
     private var deadline: Date?
+    /// 当前阶段真正开始的时刻，用于统计「实际坐了多久」（暂停时间不算）。
+    private var startedAt: Date?
     private var pausedRemaining: TimeInterval?
     private var customMinutes: Int?
     private var completedFocusSessions = 0
@@ -128,7 +146,10 @@ public final class TimerEngine {
     public func resume() {
         guard snapshot.isPaused, let remaining = pausedRemaining else { return }
         pausedRemaining = nil
-        deadline = now().addingTimeInterval(remaining)
+        let resumedAt = now()
+        deadline = resumedAt.addingTimeInterval(remaining)
+        // 暂停的那段时间不算「坐着的时长」，把起点往后挪。
+        startedAt = resumedAt.addingTimeInterval(-(snapshot.total - remaining))
         snapshot.isPaused = false
         snapshot.isRunning = true
         snapshot.remaining = remaining
@@ -145,6 +166,7 @@ public final class TimerEngine {
         pausedRemaining = nil
         customMinutes = nil
         pendingNext = nil
+        startedAt = nil
         completedFocusSessions = 0
         let total = TimeInterval(durations.focusMinutes * 60)
         snapshot = TimerSnapshot(
@@ -191,7 +213,9 @@ public final class TimerEngine {
     private func begin(_ phase: TimerPhase, overrideMinutes: Int? = nil) {
         let minutes = overrideMinutes ?? durations.minutes(for: phase)
         let total = TimeInterval(minutes * 60)
-        deadline = now().addingTimeInterval(total)
+        let beginAt = now()
+        deadline = beginAt.addingTimeInterval(total)
+        startedAt = beginAt
         pausedRemaining = nil
         snapshot = TimerSnapshot(
             phase: phase,
@@ -213,6 +237,13 @@ public final class TimerEngine {
         guard finished != .idle else { return }
 
         let wasCustom = customMinutes != nil
+        let planned = Int(snapshot.total.rounded())
+        let spent: Int
+        if let startedAt {
+            spent = min(planned, max(0, Int(now().timeIntervalSince(startedAt).rounded())))
+        } else {
+            spent = planned
+        }
         if finished == .focus, !wasCustom, reason == .completed {
             completedFocusSessions += 1
         }
@@ -233,11 +264,23 @@ public final class TimerEngine {
         customMinutes = nil
         deadline = nil
         pausedRemaining = nil
+        startedAt = nil
+
+        let event = { (to: TimerPhase?) in
+            PhaseTransition(
+                from: finished,
+                to: to,
+                reason: reason,
+                plannedSeconds: planned,
+                spentSeconds: spent,
+                isCustom: wasCustom
+            )
+        }
 
         if autoStartNext {
             pendingNext = nil
             begin(next)
-            onPhaseTransition?(PhaseTransition(from: finished, to: next, reason: reason))
+            onPhaseTransition?(event(next))
         } else {
             pendingNext = next
             let nextTotal = TimeInterval(durations.minutes(for: next) * 60)
@@ -254,7 +297,7 @@ public final class TimerEngine {
                 isCustom: false
             )
             emit()
-            onPhaseTransition?(PhaseTransition(from: finished, to: nil, reason: reason))
+            onPhaseTransition?(event(nil))
         }
     }
 

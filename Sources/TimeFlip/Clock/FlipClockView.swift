@@ -25,56 +25,123 @@ struct FlipClockView: View {
         metrics.rowWidth(slots: model.slotCount, colons: model.colonCount)
     }
 
+    /// 顶行 / 底行与机身左右边缘对齐，而不是与卡片对齐。
+    private var containerWidth: CGFloat { rowWidth + metrics.chassisPadding * 2 }
+
     private var captionFont: Font {
-        .system(size: metrics.fontSize * 0.16, weight: .semibold, design: .rounded)
+        .system(size: metrics.fontSize * 0.17, weight: .semibold, design: .rounded)
     }
 
     private var content: some View {
-        VStack(spacing: metrics.spacing * 0.8) {
+        VStack(spacing: metrics.spacing * 0.9) {
             if let date = model.dateLine {
                 HStack(spacing: 8) {
                     Text(date.left)
-                        .tracking(0.4)
+                        .tracking(metrics.fontSize * 0.014)
                     Spacer(minLength: 0)
                     Text(date.right)
-                        .tracking(0.8)
+                        .tracking(metrics.fontSize * 0.026)
                 }
+                .textCase(.uppercase)
                 .font(captionFont)
-                .foregroundStyle(appearance.textColor.color.opacity(0.68))
-                .frame(width: rowWidth)
+                .foregroundStyle(appearance.textColor.color.opacity(0.58))
+                .frame(width: containerWidth)
             }
 
             if appearance.style == .flip {
-                HStack(spacing: metrics.spacing) {
-                    ForEach(Array(model.characters.enumerated()), id: \.offset) { _, character in
-                        if character == ":" {
-                            colon
-                        } else {
-                            FlipDigitView(
-                                text: String(character),
-                                metrics: metrics,
-                                appearance: appearance
-                            )
-                        }
-                    }
-                }
+                cardRow
             } else {
                 digitalRow
             }
 
             if let bottom = model.bottomLine {
                 Text(bottom)
-                    .font(captionFont)
-                    .tracking(0.8)
-                    .foregroundStyle(appearance.textColor.color.opacity(0.62))
-                    .frame(width: rowWidth)
+                    .textCase(.uppercase)
+                    .font(.system(size: metrics.fontSize * 0.15, weight: .medium, design: .rounded))
+                    .tracking(metrics.fontSize * 0.02)
+                    .foregroundStyle(appearance.textColor.color.opacity(0.5))
+                    .frame(width: containerWidth)
             }
         }
     }
 
+    // MARK: - 卡片
+
+    private var cardRow: some View {
+        HStack(spacing: metrics.spacing) {
+            ForEach(Array(model.characters.enumerated()), id: \.offset) { _, character in
+                if character == ":" {
+                    colon
+                } else {
+                    FlipDigitView(
+                        text: String(character),
+                        metrics: metrics,
+                        appearance: appearance
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, metrics.chassisPadding)
+        .padding(.vertical, metrics.chassisPadding * 1.15)
+        .background { chassis }
+    }
+
+    /// 机身：卡片像嵌在一个下沉的盒子里，而不是四张纸片浮在壁纸上。
+    @ViewBuilder private var chassis: some View {
+        if metrics.chassisPadding > 0 {
+            RoundedRectangle(cornerRadius: metrics.chassisRadius, style: .continuous)
+                .fill(chassisColor)
+                .overlay(
+                    RoundedRectangle(cornerRadius: metrics.chassisRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.18),
+                                    Color.clear,
+                                    Color.black.opacity(0.10)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: metrics.chassisRadius, style: .continuous)
+                        .strokeBorder(chassisBorder, lineWidth: 1)
+                )
+                .shadow(
+                    color: appearance.shadowEnabled
+                        ? Color.black.opacity(appearance.shadowOpacity * 0.55)
+                        : .clear,
+                    radius: appearance.shadowEnabled ? appearance.shadowRadius * 0.8 : 0,
+                    y: appearance.shadowEnabled ? appearance.shadowRadius * 0.25 : 0
+                )
+        }
+    }
+
+    /// 机身是"深一号的机身色"：浅色卡配深色机身（真机就是深灰塑料框），
+    /// 深色卡配略亮的机身，保证卡片永远比机身亮或暗一档，不会被糊成一块。
+    private var chassisColor: Color {
+        let base = appearance.backgroundColor
+        let isDarkCard = base.luminance < 0.42
+        let factor = isDarkCard ? 1.55 : 0.34
+        let warm = isDarkCard ? 1.0 : 0.92
+        return Color(
+            .sRGB,
+            red: min(1, base.red * factor),
+            green: min(1, base.green * factor * warm),
+            blue: min(1, base.blue * factor * warm),
+            opacity: max(0.45, appearance.backgroundOpacity)
+        )
+    }
+
+    private var chassisBorder: Color {
+        Color.white.opacity(appearance.backgroundColor.luminance < 0.42 ? 0.14 : 0.10)
+    }
+
     private var colon: some View {
-        let dot = metrics.digitWidth * 0.16
-        return VStack(spacing: metrics.digitHeight * 0.24) {
+        let dot = metrics.digitWidth * 0.15
+        return VStack(spacing: metrics.digitHeight * 0.22) {
             Circle()
                 .fill(appearance.textColor.color)
                 .frame(width: dot, height: dot)
@@ -100,7 +167,7 @@ struct FlipClockView: View {
             }
         }
         .font(.custom(appearance.fontFamily, size: metrics.fontSize).weight(appearance.fontWeight.swiftUI))
-        .kerning(metrics.fontSize * 0.012)
+        .kerning(metrics.fontSize * 0.01)
         .monospacedDigit()
         .padding(.horizontal, metrics.spacing)
     }

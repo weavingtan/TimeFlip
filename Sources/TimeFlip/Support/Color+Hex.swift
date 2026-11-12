@@ -14,6 +14,11 @@ extension RGBAColor {
         NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
     }
 
+    /// 感知亮度（0…1）：用来判断主题是深色还是浅色，机身/描边据此反向着色。
+    var luminance: Double {
+        0.2126 * red + 0.7152 * green + 0.0722 * blue
+    }
+
     func nsColor(opacity: Double) -> NSColor {
         NSColor(srgbRed: red, green: green, blue: blue, alpha: max(0, min(1, opacity)))
     }

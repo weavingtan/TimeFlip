@@ -247,7 +247,7 @@ struct MenuPanelView: View {
 
                 Spacer(minLength: 8)
 
-                Text("完成 \(snapshot.completedFocusSessions) 轮")
+                Text(footerStats)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .monospacedDigit()
@@ -256,6 +256,15 @@ struct MenuPanelView: View {
     }
 
     // MARK: - 文案
+
+    /// 弹窗底部：优先显示今日目标进度，没设目标就退回轮次。
+    private var footerStats: String {
+        let stats = model.stats
+        if stats.dailyGoalSessions > 0 {
+            return "今日 \(stats.todaySessions)/\(stats.dailyGoalSessions) · 连续 \(stats.streakDays) 天"
+        }
+        return "完成 \(snapshot.completedFocusSessions) 轮"
+    }
 
     private var phaseTitle: String {
         if snapshot.isPaused { return "已暂停" }

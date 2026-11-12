@@ -2,6 +2,11 @@ import SwiftUI
 
 /// 单张翻页卡片：KeyframeAnimator 用一条 0 → -90 → -180 的角度曲线驱动，
 /// 前半段落下的旧上半、后半段翻起的新下半，避免两段独立动画拼接造成的卡顿感。
+///
+/// 画法按真机三层叠出来：
+/// 1. 卡面（受光渐变 + 材质高光 + 1px 描边 + 接触阴影 + 环境阴影）
+/// 2. 上下两半拼成的数字
+/// 3. 中缝：缝体 + 上半卡底部的暗边 + 下半卡上沿的高光
 struct FlipDigitView: View {
     let text: String
     let metrics: ClockMetrics
@@ -31,8 +36,17 @@ struct FlipDigitView: View {
 
     private static let perspective = 0.45
 
-    private var cornerRadius: CGFloat { metrics.digitWidth * 0.12 }
-    private var seam: CGFloat { max(1, metrics.digitHeight * 0.016) }
+    private var cornerRadius: CGFloat { metrics.cardRadius }
+    private var seam: CGFloat { max(1.2, metrics.digitHeight * 0.014) }
+    private var halfHeight: CGFloat { metrics.digitHeight / 2 }
+
+    private var fillColor: Color {
+        appearance.backgroundColor.color(
+            opacity: appearance.backgroundOpacity * appearance.backgroundColor.alpha
+        )
+    }
+
+    private var isPixel: Bool { appearance.material == .pixel }
 
     var body: some View {
         Group {
@@ -69,31 +83,39 @@ struct FlipDigitView: View {
         }
     }
 
+    // MARK: - 静态卡
+
     private var staticCard: some View {
         ZStack {
-            cardBackground
-            VStack(spacing: seam) {
-                half(current, top: true)
-                half(current, top: false)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            seamLine
+            cardFace
+            numberLayer(current)
+            seamDecoration
         }
     }
 
+    private func numberLayer(_ value: String) -> some View {
+        VStack(spacing: 0) {
+            half(value, top: true)
+            half(value, top: false)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    // MARK: - 翻页
+
     private func animatedCard(angle: Double) -> some View {
         ZStack {
-            cardBackground
+            cardFace
 
             // 上半槽 / 下半槽各自承载自己的翻页层，避免 ZStack 把翻页层放到中缝上。
-            VStack(spacing: seam) {
+            VStack(spacing: 0) {
                 ZStack {
                     clippedHalf(current, top: true, visibleFraction: topReveal(angle))
                     if angle > -90 {
                         flap(previous, top: true, angle: angle)
                     }
                 }
-                .frame(width: metrics.digitWidth, height: metrics.digitHeight / 2)
+                .frame(width: metrics.digitWidth, height: halfHeight)
 
                 ZStack {
                     clippedHalf(previous, top: false, visibleFraction: bottomReveal(angle))
@@ -101,71 +123,38 @@ struct FlipDigitView: View {
                         flap(current, top: false, angle: angle + 180)
                     }
                 }
-                .frame(width: metrics.digitWidth, height: metrics.digitHeight / 2)
+                .frame(width: metrics.digitWidth, height: halfHeight)
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
 
-            seamLine
+            seamDecoration
         }
     }
 
-    /// 卡面：上下两半各带一层极淡的渐变（上亮下暗），加一条发丝高光边，
-    /// 让"翻页卡"有厚度感，而不是一块纯色方块。
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(
-                appearance.backgroundColor.color(
-                    opacity: appearance.backgroundOpacity * appearance.backgroundColor.alpha
-                )
-            )
-            .overlay(
-                VStack(spacing: 0) {
-                    Rectangle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.10), Color.white.opacity(0.01)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                    Rectangle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.black.opacity(0.12), Color.black.opacity(0.02)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                }
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
-            )
-            .shadow(
-                color: appearance.shadowEnabled ? Color.black.opacity(appearance.shadowOpacity) : .clear,
-                radius: appearance.shadowEnabled ? appearance.shadowRadius : 0,
-                y: appearance.shadowEnabled ? appearance.shadowRadius * 0.35 : 0
-            )
-    }
-
-    /// 一片翻页卡：轻微卡面 + 数字 + 随角度加深的阴影。
-    /// 底下那半张卡的数字已被裁剪掉，所以卡面不需要做到不透明，卡片透明度保持不变。
+    /// 一片翻页卡：卡面本色 + 数字 + 随角度加深的压暗
+    /// （真机的翻页面是背光的，只会变暗，不会变白）。
     private func flap(_ value: String, top: Bool, angle: Double) -> some View {
         let progress = min(1, abs(angle) / 90)
         return ZStack {
-            Rectangle()
-                .fill(appearance.backgroundColor.color(opacity: 0.18))
+            Rectangle().fill(fillColor)
+            Rectangle().fill(flapSheen)
             half(value, top: top)
-            flapShade(top: top, intensity: 0.20 * progress)
+            Rectangle().fill(flapShade(top: top, intensity: 0.30 * progress))
         }
-        .frame(width: metrics.digitWidth, height: metrics.digitHeight / 2)
+        .frame(width: metrics.digitWidth, height: halfHeight)
         .rotation3DEffect(
             .degrees(angle),
             axis: (x: 1, y: 0, z: 0),
             anchor: top ? .bottom : .top,
             perspective: Self.perspective
+        )
+    }
+
+    private var flapSheen: LinearGradient {
+        LinearGradient(
+            colors: [Color.white.opacity(0.06), Color.clear],
+            startPoint: .top,
+            endPoint: .bottom
         )
     }
 
@@ -186,8 +175,7 @@ struct FlipDigitView: View {
     /// 只显示某半张卡的一段（用于让数字被翻页面"揭开"或"盖住"）。
     /// `visibleFraction` 与翻页面的投影互补，两者相加正好一整半，既不留缝也不重叠。
     private func clippedHalf(_ value: String, top: Bool, visibleFraction: CGFloat) -> some View {
-        let full = metrics.digitHeight / 2
-        let visible = full * min(1, max(0, visibleFraction))
+        let visible = halfHeight * min(1, max(0, visibleFraction))
         return ZStack(alignment: top ? .top : .bottom) {
             if visible > 0.5 {
                 half(value, top: top)
@@ -195,7 +183,7 @@ struct FlipDigitView: View {
         }
         .frame(width: metrics.digitWidth, height: visible, alignment: top ? .top : .bottom)
         .clipped()
-        .frame(width: metrics.digitWidth, height: full, alignment: top ? .top : .bottom)
+        .frame(width: metrics.digitWidth, height: halfHeight, alignment: top ? .top : .bottom)
     }
 
     /// 翻页面越"背光"越暗：自由边（远离转轴的那条边）颜色最深。
@@ -209,29 +197,160 @@ struct FlipDigitView: View {
         )
     }
 
-    /// 中缝：中间最暗、上下收边，模拟两张卡叠在一起的缝。
-    private var seamLine: some View {
-        Rectangle()
-            .fill(
+    // MARK: - 卡面
+
+    private var cardFace: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(fillColor)
+            .overlay(sheen.clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: borderWidth)
+            )
+            .shadow(
+                color: contactShadowColor,
+                radius: contactShadowRadius,
+                y: contactShadowOffset
+            )
+            .shadow(
+                color: ambientShadowColor,
+                radius: ambientShadowRadius,
+                y: ambientShadowOffset
+            )
+    }
+
+    /// 材质高光：不换颜色，换的是"光怎么打在卡面上"。
+    @ViewBuilder private var sheen: some View {
+        switch appearance.material {
+        case .paper:
+            LinearGradient(
+                colors: [Color.white.opacity(0.16), Color.white.opacity(0.03), Color.black.opacity(0.05)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        case .glass:
+            LinearGradient(
+                colors: [Color.white.opacity(0.34), Color.white.opacity(0.06), Color.white.opacity(0.16)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .metal:
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.26),
+                    Color.white.opacity(0.02),
+                    Color.white.opacity(0.18),
+                    Color.black.opacity(0.12)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .wood:
+            LinearGradient(
+                colors: [Color.white.opacity(0.12), Color.black.opacity(0.04), Color.black.opacity(0.18)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        case .pixel:
+            Color.clear
+        }
+    }
+
+    private var borderColor: Color {
+        switch appearance.material {
+        case .glass: return Color.white.opacity(0.42)
+        case .metal: return Color.white.opacity(0.20)
+        case .wood: return Color.black.opacity(0.35)
+        case .pixel: return Color.clear
+        case .paper: return Color.white.opacity(0.14)
+        }
+    }
+
+    private var borderWidth: CGFloat {
+        appearance.material == .glass ? 0.8 : 0.5
+    }
+
+    private var contactShadowColor: Color {
+        guard appearance.shadowEnabled, !isPixel else { return .clear }
+        return Color.black.opacity(appearance.shadowOpacity * 0.55)
+    }
+
+    private var contactShadowRadius: CGFloat {
+        guard appearance.shadowEnabled, !isPixel else { return 0 }
+        return max(1, appearance.shadowRadius * 0.10)
+    }
+
+    private var contactShadowOffset: CGFloat {
+        appearance.shadowEnabled && !isPixel ? 1.5 : 0
+    }
+
+    private var ambientShadowColor: Color {
+        guard appearance.shadowEnabled, !isPixel else { return .clear }
+        return Color.black.opacity(appearance.shadowOpacity)
+    }
+
+    private var ambientShadowRadius: CGFloat {
+        guard appearance.shadowEnabled, !isPixel else { return 0 }
+        return appearance.shadowRadius
+    }
+
+    private var ambientShadowOffset: CGFloat {
+        appearance.shadowEnabled && !isPixel ? appearance.shadowRadius * 0.35 : 0
+    }
+
+    // MARK: - 中缝
+
+    /// 三件套：缝体（深）+ 上半卡底部的暗边 + 下半卡上沿的 0.5px 高光。
+    private var seamDecoration: some View {
+        ZStack {
+            VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.10),
-                        Color.black.opacity(0.32),
-                        Color.black.opacity(0.14)
-                    ],
+                    colors: [Color.clear, Color.black.opacity(0.20)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-            )
-            .frame(width: metrics.digitWidth, height: seam)
+                .frame(height: seam * 3)
+                .offset(y: -seam * 1.5)
+
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.black.opacity(0.50),
+                                Color.black.opacity(0.62),
+                                Color.black.opacity(0.42)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(height: seam)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(height: 0.5)
+
+                LinearGradient(
+                    colors: [Color.black.opacity(0.22), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: seam * 3)
+                .offset(y: seam * 1.5)
+            }
+        }
+        .frame(width: metrics.digitWidth, height: metrics.digitHeight)
+        .allowsHitTesting(false)
     }
+
+    // MARK: - 数字
 
     private func half(_ value: String, top: Bool) -> some View {
         Text(value)
-            .font(.custom(appearance.fontFamily, size: metrics.fontSize * 0.82).weight(appearance.fontWeight.swiftUI))
+            .font(.custom(appearance.fontFamily, size: metrics.fontSize).weight(appearance.fontWeight.swiftUI))
             .foregroundStyle(appearance.textColor.color)
             .frame(width: metrics.digitWidth, height: metrics.digitHeight)
-            .frame(width: metrics.digitWidth, height: metrics.digitHeight / 2, alignment: top ? .top : .bottom)
+            .frame(width: metrics.digitWidth, height: halfHeight, alignment: top ? .top : .bottom)
             .clipped()
     }
 }

@@ -29,6 +29,10 @@ func expectClose(_ got: Double, _ want: Double, tolerance: Double = 1.5, _ label
     }
 }
 
+func expectCloseDouble(_ got: Double, _ want: Double, tolerance: Double = 0.001, _ label: String, line: Int = #line) {
+    expectClose(got, want, tolerance: tolerance, label, line: line)
+}
+
 final class TestClock {
     var now: Date
     init(_ now: Date = Date(timeIntervalSince1970: 1_700_000_000)) { self.now = now }
@@ -87,6 +91,23 @@ func testFocusCompletesToShortBreak() {
     expectEqual(transitions.first?.from, .focus, "事件 from = focus")
     expectEqual(transitions.first?.to, nil, "未自动开始时 to = nil")
     expectEqual(transitions.first?.reason, .completed, "事件原因是完成")
+    expectEqual(transitions.first?.plannedSeconds, 1500, "事件带计划时长")
+    expectEqual(transitions.first?.spentSeconds, 1500, "事件带实际时长")
+    expectEqual(transitions.first?.isCustom, false, "普通专注不算自定义")
+}
+
+func testTransitionSpentCapsOnSleep() {
+    let clock = TestClock()
+    let engine = makeEngine(clock: clock)
+    var transition: PhaseTransition?
+    engine.onPhaseTransition = { transition = $0 }
+
+    engine.start()
+    clock.advance(7200)   // 睡眠两小时才回来
+    engine.tick()
+
+    expectEqual(transition?.plannedSeconds, 1500, "计划时长不变")
+    expectEqual(transition?.spentSeconds, 1500, "实际时长封顶到计划时长")
 }
 
 func testLongBreakAfterConfiguredSessions() {
@@ -301,7 +322,9 @@ func testMissingSectionsFallback() {
     store.load()
     expectEqual(store.settings.appearance.style, .digital, "保留已有字段")
     expectEqual(store.settings.appearance.fontSize, 140, "保留已有数值")
-    expectEqual(store.settings.appearance.textColor, .ink, "缺失字段用默认值")
+    expectEqual(store.settings.appearance.textColor, ClockAppearance().textColor, "缺失字段用默认值")
+    expectEqual(store.settings.appearance.material, .paper, "新增材质字段缺失时用默认值")
+    expectEqual(store.settings.lock.style, .off, "新增锁屏段缺失时默认关闭")
     expectEqual(store.settings.behavior.form, .floating, "缺失 section 用默认值")
     expectEqual(store.settings.menuBar.style, .iconAndTime, "缺失 section 用默认值")
 }
@@ -374,12 +397,350 @@ func testClockLayout() {
     expectEqual(ClockLayout.digitWidth(containerWidth: 0, slots: 6, colons: 2), 0, "零宽度返回 0")
 }
 
+// MARK: - Task 5：主题
+
+func testThemePresets() {
+    let presets = ThemePreset.all
+    expectEqual(presets.count, 8, "共 8 套预设")
+    expectEqual(Set(presets.map(\.id)).count, 8, "预设 id 唯一")
+    expectEqual(Set(presets.map(\.name)).count, 8, "预设名不重复")
+
+    for preset in presets {
+        let appearance = preset.appearance
+        expect((12...400).contains(appearance.fontSize), "\(preset.id) 字号合法")
+        expect((0...1).contains(appearance.backgroundOpacity), "\(preset.id) 不透明度合法")
+        expect((0...40).contains(appearance.shadowRadius), "\(preset.id) 投影半径合法")
+        expect((0...1).contains(appearance.shadowOpacity), "\(preset.id) 投影透明度合法")
+        expect(appearance.fontFamily.isEmpty == false, "\(preset.id) 有字体")
+    }
+
+    expectEqual(ThemePreset.preset(id: "cream")?.name, "奶油白", "按 id 取预设")
+    expect(ThemePreset.preset(id: "不存在") == nil, "未知 id 返回 nil")
+}
+
+func testThemeApplyKeepsFontSize() {
+    var current = ClockAppearance()
+    current.fontSize = 233
+    let applied = ThemePreset.all[1].applied(to: current)
+    expectEqual(applied.fontSize, 233, "套用预设保留用户字号")
+    expectEqual(applied.themeID, ThemePreset.all[1].id, "套用后记录 preset id")
+    expectEqual(applied.style, ThemePreset.all[1].appearance.style, "套用后样式来自预设")
+}
+
+func testThemeDocumentRoundTrip() {
+    var appearance = ClockAppearance()
+    appearance.fontSize = 128
+    appearance.material = .metal
+    let document = ThemeDocument(name: "我的霓虹", appearance: appearance)
+
+    guard let text = document.encoded() else {
+        expect(false, "主题编码成功")
+        return
+    }
+    expect(!text.contains("\n"), "编码结果是单行")
+
+    let decoded = ThemeDocument.decode(text)
+    expectEqual(decoded?.name, "我的霓虹", "名称往返")
+    expectEqual(decoded?.appearance.fontSize, 128, "字号往返")
+    expectEqual(decoded?.appearance.material, .metal, "材质往返")
+}
+
+func testThemeDocumentTolerance() {
+    var appearance = ClockAppearance()
+    appearance.fontSize = 9999
+    appearance.backgroundOpacity = -3
+    let text = "这是我的主题，复制这段就行："
+        + (ThemeDocument(name: "   ", appearance: appearance).encoded() ?? "")
+        + " 谢谢！"
+
+    let decoded = ThemeDocument.decode(text)
+    expect(decoded != nil, "容忍前后噪音")
+    expectEqual(decoded?.appearance.fontSize, 400, "越界字号被夹回")
+    expectEqual(decoded?.appearance.backgroundOpacity, 0, "越界不透明度被夹回")
+    expectEqual(decoded?.name, "自定义主题", "空名称兜底")
+    expect(ThemeDocument.decode("") == nil, "空串返回 nil")
+    expect(ThemeDocument.decode("hello world") == nil, "非 JSON 返回 nil")
+}
+
+// MARK: - Task 6：会话与统计
+
+func makesStatsCalendar() -> Calendar { utcCalendar() }
+
+func statsRecord(
+    calendar: Calendar,
+    daysAgo: Int,
+    hour: Int,
+    completed: Bool = true,
+    seconds: Int = 1500
+) -> SessionRecord {
+    let base = utcDate(2026, 11, 12, hour, 0, 0)
+    let start = calendar.date(byAdding: .day, value: -daysAgo, to: base) ?? base
+    return SessionRecord(
+        startedAt: start,
+        endedAt: start.addingTimeInterval(Double(seconds)),
+        plannedSeconds: 1500,
+        actualSeconds: seconds,
+        completed: completed
+    )
+}
+
+func testSessionRecordFromTransition() {
+    let now = utcDate(2026, 11, 12, 15, 0, 0)
+    let completed = PhaseTransition(
+        from: .focus,
+        to: .shortBreak,
+        reason: .completed,
+        plannedSeconds: 1500,
+        spentSeconds: 1500,
+        isCustom: false
+    )
+    let record = SessionRecord.make(transition: completed, now: now)
+    expectEqual(record.phase, .focus, "只记专注阶段")
+    expectEqual(record.completed, true, "完成记 true")
+    expectEqual(record.plannedSeconds, 1500, "计划时长进账本")
+    expectEqual(record.actualSeconds, 1500, "实际时长进账本")
+    expectEqual(record.endedAt, now, "结束时间取事件时刻")
+    expectEqual(record.startedAt, now.addingTimeInterval(-1500), "开始时间由实际时长反推")
+
+    let skipped = PhaseTransition(
+        from: .focus,
+        to: .shortBreak,
+        reason: .skipped,
+        plannedSeconds: 1500,
+        spentSeconds: 420,
+        isCustom: false
+    )
+    let interrupted = SessionRecord.make(transition: skipped, now: now)
+    expectEqual(interrupted.completed, false, "跳过记 false")
+    expectEqual(interrupted.actualSeconds, 420, "跳过记录实际坐了多久")
+}
+
+func testSessionLogRoundTrip() {
+    let dir = makeTempDir()
+    let log = SessionLog(directory: dir)
+    let calendar = utcCalendar()
+    log.append(statsRecord(calendar: calendar, daysAgo: 0, hour: 9))
+    log.append(statsRecord(calendar: calendar, daysAgo: 0, hour: 10, completed: false, seconds: 600))
+    log.save()
+
+    let reloaded = SessionLog(directory: dir)
+    reloaded.load()
+    expectEqual(reloaded.records.count, 2, "会话写入后能读回")
+    expectEqual(reloaded.records.first?.actualSeconds, 1500, "按开始时间排序")
+}
+
+func testSessionLogCorruptFallback() {
+    let dir = makeTempDir()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try? Data("not json".utf8).write(to: dir.appendingPathComponent("sessions.json"))
+
+    let log = SessionLog(directory: dir)
+    log.load()
+    expectEqual(log.records.count, 0, "损坏文件回退空表")
+    let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+    expect(files.contains { $0.hasPrefix("sessions.broken-") }, "损坏文件已备份")
+}
+
+func testSessionLogPrune() {
+    let dir = makeTempDir()
+    let log = SessionLog(directory: dir)
+    let calendar = utcCalendar()
+    let now = utcDate(2026, 11, 12, 15, 0, 0)
+    log.append(statsRecord(calendar: calendar, daysAgo: 0, hour: 9))
+    log.append(statsRecord(calendar: calendar, daysAgo: 400, hour: 9))
+    log.prune(keepingDays: 365, now: now, calendar: calendar)
+    expectEqual(log.records.count, 1, "超过 365 天的记录被裁掉")
+}
+
+func testFocusStatsToday() {
+    let calendar = makesStatsCalendar()
+    let now = utcDate(2026, 11, 12, 15, 0, 0)
+    var records = [
+        statsRecord(calendar: calendar, daysAgo: 0, hour: 9),
+        statsRecord(calendar: calendar, daysAgo: 0, hour: 10),
+        statsRecord(calendar: calendar, daysAgo: 1, hour: 9),
+        statsRecord(calendar: calendar, daysAgo: 2, hour: 9),
+        statsRecord(calendar: calendar, daysAgo: 2, hour: 14, completed: false, seconds: 300)
+    ]
+    // 休息阶段不参与统计
+    records.append(
+        SessionRecord(
+            startedAt: utcDate(2026, 11, 12, 11, 0, 0),
+            endedAt: utcDate(2026, 11, 12, 11, 5, 0),
+            phase: .shortBreak,
+            plannedSeconds: 300,
+            actualSeconds: 300,
+            completed: true
+        )
+    )
+
+    let stats = FocusStats.make(records: records, goal: 4, now: now, calendar: calendar)
+    expectEqual(stats.todaySessions, 2, "今日完成 2 轮")
+    expectEqual(stats.todayFocusSeconds, 3000, "今日专注 50 分钟")
+    expectEqual(stats.streakDays, 3, "连续 3 天")
+    expectEqual(stats.completedCount, 4, "只统计专注阶段")
+    expectEqual(stats.interruptedCount, 1, "中断 1 次")
+    expectCloseDouble(stats.interruptionRate, 0.2, "中断率 20%")
+    expectEqual(stats.bestHour, 9, "最佳时段是 9 点")
+    expectEqual(stats.last14Days.count, 14, "14 天柱状")
+    expectEqual(stats.last14Days.last?.sessions, 2, "最后一格是今天")
+    expectEqual(stats.goalReached, false, "2/4 未达成")
+    expectCloseDouble(stats.goalProgress, 0.5, "目标进度 50%")
+}
+
+func testFocusStatsStreakFromYesterday() {
+    let calendar = makesStatsCalendar()
+    let now = utcDate(2026, 11, 12, 8, 0, 0)
+    let records = [
+        statsRecord(calendar: calendar, daysAgo: 1, hour: 9),
+        statsRecord(calendar: calendar, daysAgo: 2, hour: 9)
+    ]
+    let stats = FocusStats.make(records: records, goal: 4, now: now, calendar: calendar)
+    expectEqual(stats.streakDays, 2, "今天还没专注时从昨天起算")
+    expectEqual(stats.todaySessions, 0, "今日 0 轮")
+}
+
+func testFocusStatsEmpty() {
+    let calendar = makesStatsCalendar()
+    let stats = FocusStats.make(
+        records: [],
+        goal: 4,
+        now: utcDate(2026, 11, 12, 15, 0, 0),
+        calendar: calendar
+    )
+    expectEqual(stats.streakDays, 0, "空账本连续 0 天")
+    expectEqual(stats.interruptionRate, 0, "空账本中断率 0")
+    expectEqual(stats.bestHour, nil, "空账本没有最佳时段")
+}
+
+func testStatsFormatting() {
+    expectEqual(StatsFormatting.duration(seconds: 45 * 60), "45 分钟", "不足一小时")
+    expectEqual(StatsFormatting.duration(seconds: 3 * 3600 + 12 * 60), "3 小时 12 分", "小时+分钟")
+    expectEqual(StatsFormatting.compactDuration(seconds: 3 * 3600 + 12 * 60), "3h12m", "紧凑格式")
+    expectEqual(StatsFormatting.compactDuration(seconds: 42 * 60), "42m", "紧凑分钟")
+}
+
+// MARK: - Task 7：锁屏策略
+
+func testLockPolicyFocus() {
+    var settings = LockSettings()
+    settings.style = .displaySleep
+    settings.graceSeconds = 10
+
+    let action = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: false,
+        wokeFromSleep: false,
+        hasFullScreenApp: false
+    )
+    expectEqual(action.lock, .displaySleep, "专注结束后锁屏")
+    expectEqual(action.delaySeconds, 10, "宽限 10 秒")
+    expect(action.overlay, "仍然铺休息遮罩")
+}
+
+func testLockPolicyOff() {
+    let settings = LockSettings()
+    let action = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: false,
+        wokeFromSleep: false,
+        hasFullScreenApp: false
+    )
+    expectEqual(action.lock, nil, "关闭时不锁屏")
+    expectEqual(action.delaySeconds, 0, "关闭时无延迟")
+}
+
+func testLockPolicyBreakNeverLocks() {
+    var settings = LockSettings()
+    settings.style = .lock
+    let action = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .shortBreak,
+        isCustom: false,
+        wokeFromSleep: false,
+        hasFullScreenApp: false
+    )
+    expectEqual(action.lock, nil, "休息结束不锁屏")
+    expect(action.overlay, "休息结束仍提示")
+}
+
+func testLockPolicySleepNeverLocks() {
+    var settings = LockSettings()
+    settings.style = .lock
+    let action = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: false,
+        wokeFromSleep: true,
+        hasFullScreenApp: false
+    )
+    expectEqual(action.lock, nil, "睡眠唤醒后不锁屏")
+}
+
+func testLockPolicyFullScreenSkips() {
+    var settings = LockSettings()
+    settings.style = .lock
+    let skip = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: false,
+        wokeFromSleep: false,
+        hasFullScreenApp: true
+    )
+    expectEqual(skip.lock, nil, "全屏应用下不锁屏")
+
+    settings.skipWhenFullScreenApp = false
+    let force = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: false,
+        wokeFromSleep: false,
+        hasFullScreenApp: true
+    )
+    expectEqual(force.lock, .lock, "关掉保护后全屏也锁")
+}
+
+func testLockPolicyCustomNeverLocks() {
+    var settings = LockSettings()
+    settings.style = .lock
+    let action = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: true,
+        wokeFromSleep: false,
+        hasFullScreenApp: false
+    )
+    expectEqual(action.lock, nil, "自定义倒计时不锁屏")
+}
+
+func testLockPolicyGraceClamped() {
+    let json = #"{"style":"lock","graceSeconds":999,"overlayEnabled":true,"skipWhenFullScreenApp":true}"#
+    let decoded = try? JSONDecoder().decode(LockSettings.self, from: Data(json.utf8))
+    expectEqual(decoded?.graceSeconds, 60, "宽限秒数夹到 60")
+
+    var settings = LockSettings()
+    settings.style = .lock
+    settings.graceSeconds = 0
+    let immediate = LockPolicy.action(
+        settings: settings,
+        finishedPhase: .focus,
+        isCustom: false,
+        wokeFromSleep: false,
+        hasFullScreenApp: false
+    )
+    expectEqual(immediate.delaySeconds, 0, "0 秒表示立即")
+    expectEqual(immediate.lock, .lock, "立即锁屏")
+}
+
 // MARK: - Runner
 
 let tests: [(String, () -> Void)] = [
     ("初始状态", testInitialState),
     ("开始专注", testStartFocus),
     ("专注完成进入短休", testFocusCompletesToShortBreak),
+    ("睡眠补时封顶实际时长", testTransitionSpentCapsOnSleep),
     ("轮次到点进入长休", testLongBreakAfterConfiguredSessions),
     ("自动接续", testAutoStartNext),
     ("从结束态启动下一阶段", testStartFromFinishedIdle),
@@ -399,6 +760,25 @@ let tests: [(String, () -> Void)] = [
     ("时钟文案", testClockFormats),
     ("日期与底行", testDateAndBottomLine),
     ("字号反算", testClockLayout),
+    ("八套预设", testThemePresets),
+    ("套用预设保留字号", testThemeApplyKeepsFontSize),
+    ("主题 JSON 往返", testThemeDocumentRoundTrip),
+    ("主题 JSON 容错", testThemeDocumentTolerance),
+    ("会话记录由事件生成", testSessionRecordFromTransition),
+    ("会话账本往返", testSessionLogRoundTrip),
+    ("会话损坏兜底", testSessionLogCorruptFallback),
+    ("会话裁剪", testSessionLogPrune),
+    ("今日统计", testFocusStatsToday),
+    ("连续天数", testFocusStatsStreakFromYesterday),
+    ("空账本", testFocusStatsEmpty),
+    ("统计文案", testStatsFormatting),
+    ("锁屏：专注完成", testLockPolicyFocus),
+    ("锁屏：关闭", testLockPolicyOff),
+    ("锁屏：休息不锁", testLockPolicyBreakNeverLocks),
+    ("锁屏：睡眠不锁", testLockPolicySleepNeverLocks),
+    ("锁屏：全屏跳过", testLockPolicyFullScreenSkips),
+    ("锁屏：自定义不锁", testLockPolicyCustomNeverLocks),
+    ("锁屏：宽限夹取", testLockPolicyGraceClamped),
 ]
 
 for (name, body) in tests {

@@ -13,6 +13,22 @@ macOS 菜单栏番茄钟 + 桌面翻转时钟挂件。常驻菜单栏计时，�
 - 菜单栏显示：图标+时间 / 仅时间 / 仅图标，运行中显示圆环进度
 - 登录时自动启动（SMAppService）
 
+**强制休息**
+- 全屏休息遮罩：到点盖住所有屏幕，显示休息倒计时 + 呼吸引导，休息结束自动消失
+- 锁屏：可选「关闭屏幕」（无需权限）或「锁定屏幕」（发 ⌃⌘Q，首次需授权辅助功能）
+- 宽限期：默认 10 秒，可点「再等 5 分钟」；自定义倒计时、睡眠唤醒、全屏演示/录屏时不锁屏
+
+**主题**
+- 8 套精调预设一键切换：奶油白 / 霓虹暗夜 / 胶片颗粒 / 报纸黑白 / 磨砂玻璃 / 木质翻牌 / 像素 / 纯数字极简
+- 卡面材质：纸面 / 玻璃 / 金属 / 木质 / 像素；机身托盘、投影、字号、配色仍可微调
+- 主题可导出为 JSON（文件或剪贴板）互相分享，无需账号与联网
+
+**统计**
+- 本地记录每次专注（`sessions.json`，保留一年），不上传
+- 每日目标、连续天数、今日/本周专注时长、14 天柱状图、最佳时段、中断率
+- 一键生成 1080×1350 分享竖图，可复制到剪贴板或保存到桌面
+- 菜单栏弹窗底部显示「今日 3/4 · 连续 5 天」
+
 **桌面翻转时钟**
 - 显示内容：自动（计时中显示剩余倒计时，空闲显示当前时间）/ 仅倒计时 / 仅时钟
 - 形态：浮动窗口（可拖拽、可按屏幕记忆位置）/ 铺满整个屏幕
@@ -24,7 +40,7 @@ macOS 菜单栏番茄钟 + 桌面翻转时钟挂件。常驻菜单栏计时，�
 
 ## 下载
 
-[Releases](https://github.com/weavingtan/TimeFlip/releases/latest) 里有打包好的 `TimeFlip-1.1.0-macos.zip`（macOS 14+；ad-hoc 签名、未公证）。
+[Releases](https://github.com/weavingtan/TimeFlip/releases/latest) 里有打包好的 `TimeFlip-1.2.0-macos.zip`（macOS 14+；ad-hoc 签名、未公证）。
 解压后把 `TimeFlip.app` 拖进「应用程序」；首次打开若提示「无法验证开发者」，右键 →「打开」，或先执行：
 
 ```bash
@@ -47,7 +63,7 @@ open dist/TimeFlip.app      # 启动（无 Dock 图标，只在菜单栏）
 ## 测试
 
 ```bash
-./scripts/test.sh    # 引擎断言（97 项：状态机、设置持久化、文案、字号反算）
+./scripts/test.sh    # 引擎断言（201 项：状态机、设置持久化、文案、字号反算、主题、统计、锁屏策略）
 ./scripts/smoke.sh   # 测试 + 构建 + 离屏渲染 + 窗口层级/尺寸断言 + 还原设置
 ```
 
@@ -70,9 +86,12 @@ dist/TimeFlip.app/Contents/MacOS/TimeFlip --render-settings /tmp/tf-preview
 ## 数据位置
 
 - 设置：`~/Library/Application Support/TimeFlip/settings.json`（JSON，损坏时自动备份为 `settings.broken-*.json` 并回退默认值）
+- 专注记录：`~/Library/Application Support/TimeFlip/sessions.json`（本地，保留最近一年，损坏时备份为 `sessions.broken-*.json`）
 
 ## 已知限制
 
 - ad-hoc 签名下系统通知可能拿不到授权，此时降级为提示音 + 图标变红，功能不受影响。
+- 「锁定屏幕」依赖系统快捷键 ⌃⌘Q，需要在「系统设置 → 隐私与安全性 → 辅助功能」里授权；未授权时自动退化为「关闭屏幕」（`pmset displaysleepnow`，无需权限）。
+- 账户没有密码时，锁屏不会真的挡住你——这是系统行为，App 无法绕过。
 - 未做 Developer ID 签名与公证，分发给他人需要自行签名。
-- 只支持 macOS 14+。
+- 只支持 macOS 14+（锁屏相关路径在 macOS 15.6.1 实测通过）。
