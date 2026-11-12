@@ -49,3 +49,22 @@
 4. 切「铺满屏幕」，确认整屏翻转时钟且不挡其他窗口（切到别的 App 看它是否被盖住）。
 5. 切回「浮动窗口」→ 直接按住时钟拖到别处（不需要任何按钮）→ 松手后确认菜单栏 App 没有被切走 → 重启 App 确认位置保留。
 6. 选 5 分钟快捷倒计时等结束，确认提示音、菜单栏变红、通知（若授权）。
+
+## 2026-11-12 UI 优化回归
+
+改动范围：新增 `Sources/TimeFlip/Design/Theme.swift`（阶段配色与按钮/卡片样式），重做菜单栏弹窗与设置面板，
+翻转卡片加卡面渐变与中缝；顺带修了每秒重复刷新菜单栏/挂件、铺满字号按主屏而非挂件所在屏、字号滑杆不吸附、
+设置面板每次重绘都枚举字族与系统音效目录等问题。
+
+| 项目 | 命令 | 结果 |
+|---|---|---|
+| 引擎断言 | `./scripts/test.sh` | ALL 97 CHECKS PASSED |
+| 端到端冒烟 | `./scripts/smoke.sh` | SMOKE PASSED（floating 575×219、full 1728×1117、设置窗口 1 个、HITTEST=DragCatcherView、DRAGTEST stayed/resized/saved 全 true）|
+| 弹窗渲染 | `--render-settings` | menu-panel / -idle / -break / -finished 四种状态都排版完整、无截断 |
+| 设置面板渲染 | `--render-settings` | 三页整页渲染（860×1000），卡片齐全（Picker/Slider/Toggle/TextField 显示为黄色占位块属正常）|
+| 真实配置渲染 | `--render-preview` | `6-current-settings.png` 读本机 settings.json 出图，用于核对实际观感 |
+
+已知观感问题（本轮未动动画几何）：翻页动画在 90°–180° 段，卡片底部约 12–16% 会短暂偏亮。
+原因：`rotation3DEffect(perspective:)` 让翻页面靠观察者的一边被放大，实际投影高度大于 `cos θ`，
+而"揭开"的裁剪量按 `1 - cos θ` 算，两者对不齐。静态图在 -120° 可复现；要修需要按真实投影重算裁剪，
+风险高于收益（会牵动已修好的"翻页面与卡面互补、不重影"逻辑），暂记在此。

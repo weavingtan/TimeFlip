@@ -49,6 +49,18 @@ enum PreviewRenderer {
         clockOnly.appearance.fontSize = 64
         clockOnly.appearance.showBottomLine = false
         write(model: render(settings: clockOnly, snapshot: snapshot), to: directory.appendingPathComponent("4-clock-only.png"))
+
+        // 6. 按本机已保存的设置再画一张：核对真实配置下的观感（只读设置，不写回）。
+        let store = SettingsStore(directory: AppPaths.supportDirectory)
+        store.load()
+        var current = store.settings
+        if current.appearance.fontSize > 240 {
+            current.appearance.fontSize = 240
+        }
+        write(
+            model: render(settings: current, snapshot: snapshot),
+            to: directory.appendingPathComponent("6-current-settings.png")
+        )
     }
 
     static func renderSettings(to directory: URL) {
@@ -68,17 +80,41 @@ enum PreviewRenderer {
         )
         let model = AppModel(snapshot: snapshot, settings: TimeFlipSettings())
 
-        let panel = MenuPanelView(model: model)
-            .frame(width: 320, height: 420)
-        if let png = pngData(for: panel) {
-            let url = directory.appendingPathComponent("menu-panel.png")
-            try? png.write(to: url)
-            print("wrote \(url.path)")
+        // 弹窗的四种状态都画出来：运行中 / 空闲 / 休息 / 刚结束，避免某一种状态排版塌掉。
+        let states: [(name: String, snapshot: TimerSnapshot)] = [
+            ("menu-panel", snapshot),
+            ("menu-panel-idle", TimerSnapshot(
+                phase: .idle, isRunning: false, isPaused: false, isFinished: false,
+                remaining: 1500, total: 1500, completedFocusSessions: 0,
+                nextPhase: nil, progress: 0, isCustom: false
+            )),
+            ("menu-panel-break", TimerSnapshot(
+                phase: .shortBreak, isRunning: true, isPaused: false, isFinished: false,
+                remaining: 268, total: 300, completedFocusSessions: 1,
+                nextPhase: nil, progress: 1 - 268.0 / 300.0, isCustom: false
+            )),
+            ("menu-panel-finished", TimerSnapshot(
+                phase: .idle, isRunning: false, isPaused: false, isFinished: true,
+                remaining: 300, total: 300, completedFocusSessions: 4,
+                nextPhase: .longBreak, progress: 0, isCustom: false
+            ))
+        ]
+
+        for state in states {
+            let panelModel = AppModel(snapshot: state.snapshot, settings: TimeFlipSettings())
+            let panel = MenuPanelView(model: panelModel)
+                .frame(width: TFTheme.panelWidth, height: 470)
+            if let png = pngData(for: panel) {
+                let url = directory.appendingPathComponent("\(state.name).png")
+                try? png.write(to: url)
+                print("wrote \(url.path)")
+            }
         }
 
         for page in SettingsView.Page.allCases {
+            // 不滚动的整页渲染：给足高度，保证每张卡片都完整可见。
             let view = SettingsView(model: model, initialPage: page, rendering: true)
-                .frame(width: 860, height: 620)
+                .frame(width: 860, height: 1000)
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2
             guard let image = renderer.nsImage,

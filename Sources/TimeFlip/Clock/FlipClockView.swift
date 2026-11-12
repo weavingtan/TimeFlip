@@ -25,16 +25,22 @@ struct FlipClockView: View {
         metrics.rowWidth(slots: model.slotCount, colons: model.colonCount)
     }
 
+    private var captionFont: Font {
+        .system(size: metrics.fontSize * 0.16, weight: .semibold, design: .rounded)
+    }
+
     private var content: some View {
         VStack(spacing: metrics.spacing * 0.8) {
             if let date = model.dateLine {
                 HStack(spacing: 8) {
                     Text(date.left)
+                        .tracking(0.4)
                     Spacer(minLength: 0)
                     Text(date.right)
+                        .tracking(0.8)
                 }
-                .font(.system(size: metrics.fontSize * 0.17, weight: .semibold, design: .rounded))
-                .foregroundStyle(appearance.textColor.color.opacity(0.72))
+                .font(captionFont)
+                .foregroundStyle(appearance.textColor.color.opacity(0.68))
                 .frame(width: rowWidth)
             }
 
@@ -58,21 +64,23 @@ struct FlipClockView: View {
 
             if let bottom = model.bottomLine {
                 Text(bottom)
-                    .font(.system(size: metrics.fontSize * 0.17, weight: .semibold, design: .rounded))
-                    .foregroundStyle(appearance.textColor.color.opacity(0.72))
+                    .font(captionFont)
+                    .tracking(0.8)
+                    .foregroundStyle(appearance.textColor.color.opacity(0.62))
                     .frame(width: rowWidth)
             }
         }
     }
 
     private var colon: some View {
-        VStack(spacing: metrics.digitHeight * 0.22) {
+        let dot = metrics.digitWidth * 0.16
+        return VStack(spacing: metrics.digitHeight * 0.24) {
             Circle()
                 .fill(appearance.textColor.color)
-                .frame(width: metrics.digitWidth * 0.13, height: metrics.digitWidth * 0.13)
+                .frame(width: dot, height: dot)
             Circle()
                 .fill(appearance.textColor.color)
-                .frame(width: metrics.digitWidth * 0.13, height: metrics.digitWidth * 0.13)
+                .frame(width: dot, height: dot)
         }
         .frame(width: metrics.colonWidth, height: metrics.digitHeight)
         .opacity(colonOpacity)
@@ -92,6 +100,7 @@ struct FlipClockView: View {
             }
         }
         .font(.custom(appearance.fontFamily, size: metrics.fontSize).weight(appearance.fontWeight.swiftUI))
+        .kerning(metrics.fontSize * 0.012)
         .monospacedDigit()
         .padding(.horizontal, metrics.spacing)
     }

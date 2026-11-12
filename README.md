@@ -62,8 +62,8 @@ dist/TimeFlip.app/Contents/MacOS/TimeFlip --render-preview  /tmp/tf-preview
 dist/TimeFlip.app/Contents/MacOS/TimeFlip --render-settings /tmp/tf-preview
 ```
 
-- `--render-preview`：翻转卡片（浅/深）、纯数字、仅时钟 四张挂件图
-- `--render-settings`：菜单栏弹窗 + 设置面板三页
+- `--render-preview`：翻转卡片（浅/深）、纯数字、仅时钟、翻页角度展开图，外加一张按本机已保存设置渲染的挂件图
+- `--render-settings`：菜单栏弹窗的四种状态（运行中 / 空闲 / 休息 / 刚结束）+ 设置面板三页
 
 设置面板里的 Picker/Slider 是 NS 控件，离屏渲染会显示为黄色占位块，这是正常现象。
 

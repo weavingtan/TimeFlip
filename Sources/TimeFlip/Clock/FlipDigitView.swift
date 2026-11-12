@@ -29,8 +29,10 @@ struct FlipDigitView: View {
         _previous = State(initialValue: previewPrevious ?? text)
     }
 
+    private static let perspective = 0.45
+
     private var cornerRadius: CGFloat { metrics.digitWidth * 0.12 }
-    private var seam: CGFloat { max(1, metrics.digitHeight * 0.012) }
+    private var seam: CGFloat { max(1, metrics.digitHeight * 0.016) }
 
     var body: some View {
         Group {
@@ -107,12 +109,39 @@ struct FlipDigitView: View {
         }
     }
 
+    /// 卡面：上下两半各带一层极淡的渐变（上亮下暗），加一条发丝高光边，
+    /// 让"翻页卡"有厚度感，而不是一块纯色方块。
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(
                 appearance.backgroundColor.color(
                     opacity: appearance.backgroundOpacity * appearance.backgroundColor.alpha
                 )
+            )
+            .overlay(
+                VStack(spacing: 0) {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.10), Color.white.opacity(0.01)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.black.opacity(0.12), Color.black.opacity(0.02)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
             )
             .shadow(
                 color: appearance.shadowEnabled ? Color.black.opacity(appearance.shadowOpacity) : .clear,
@@ -136,7 +165,7 @@ struct FlipDigitView: View {
             .degrees(angle),
             axis: (x: 1, y: 0, z: 0),
             anchor: top ? .bottom : .top,
-            perspective: 0.45
+            perspective: Self.perspective
         )
     }
 
@@ -180,9 +209,20 @@ struct FlipDigitView: View {
         )
     }
 
+    /// 中缝：中间最暗、上下收边，模拟两张卡叠在一起的缝。
     private var seamLine: some View {
         Rectangle()
-            .fill(Color.black.opacity(0.18))
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.10),
+                        Color.black.opacity(0.32),
+                        Color.black.opacity(0.14)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
             .frame(width: metrics.digitWidth, height: seam)
     }
 
